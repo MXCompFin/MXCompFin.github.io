@@ -1,0 +1,26 @@
+---
+title: "MXCompFin Computational Finance"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+## **MXCompFin**
+
+**MXCompFin** is a project born in 2017 with the colaboration between David Montalvan and Gerardo Alcala.
+
+The main purposes of the project are:
+
+1. **Educational purposes:** We're not here to make you rich but give you some insights about financial topics we consider interesting and/or relevants.
+
+2. **Fill the gap:** We're looking to fill the gap between mathematical theory and computational implementation of financial models.
+
+## **Disclaimer**
+
+Use the material at your own risk, as stated above everything is for **educational purposes only**.
+
+If you have any comment, feel free to contact us at:
+mxcompfin@gmail.com
+
+## **Contents**
