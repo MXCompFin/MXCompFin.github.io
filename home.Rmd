@@ -27,5 +27,5 @@ mxcompfin@gmail.com
 
 * [Downloading historical prices from Google Finance (**Python**)](https://mxcompfin.github.io/google_finance)
 
-* [Neat implementation of Markowitz Efficient Frontier (**R**)](https://mxcompfin.github.io/Markowitz)
+* [Neat implementation of Markowitz Efficient Frontier (**R**)](https://mxcompfin.github.io/Markowitz/Markowitz.html)
 
