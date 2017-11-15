@@ -1,0 +1,242 @@
+---
+title: "Markowitz efficient frontier in R"
+author: "Gerardo Alcalá"
+date: "14 de noviembre de 2017"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(readr)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(reshape2)
+library(stringr)
+library(lazyeval)
+library(knitr)
+library(kernlab)
+library(lazyeval)
+library(ggplot2)
+library(glue)
+library(quadprog)
+library(purrr)
+library(caret)
+library(quantmod)
+library(ISLR)
+library(forecast)
+library(Hmisc)
+library(gridExtra)
+library(optimx)
+library(prettydoc)
+```
+
+# Solving Markowitz's efficient frontier in R.
+  
+### Introduction.
+  
+
+Anyone interested in Finance has come across literature related to Modern Portfolio Theory and the relationship between returns and risk, best explained by Harry Markowitz in 1952 in his Article [Portfolio Selection](http://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.1952.tb01525.x/full). I'm a firm believer in the importance of theory to fully understand a model, both from implementation stage to the use in investment decisions applied to real world problems.  
+  
+What i've found harder to find is an implementation of the model that describes different issues faced by finance professionals when they are required (or curious) to find the efficient frontier given a set of prices of different securities beyond the lousy examples found on the internet with two or three assets only or even worse: in Excel.  
+  
+The following sections will describe an implementation based on data from the securities in the New York Stock Exchange dataset found in [kaggle](https://www.kaggle.com/dgawlik/nyse) as an illustrative example of the versatility of R to handle medium sized datasets of prices. Along the way, i will describe some issues faced with each of the steps in the implementation that should be taken into consideration, as well as my personal thoughts on certain issues. Please feel free to share your ideas to the issues raised during this exercise and i will try to address them fully in further updates.  
+  
+    
+### A little bit of theory.
+  
+  
+I'm not going to bore any reader on the theory behind this, but some notation needs to be introduced.  
+  
+  
+We model our assets by their expected return, $E[R]$ and their risk, which is expressed by their standard deviation, $\sigma$. Our investment decisions are expressed by investing 100% of our wealth in assets, where each particular investment represents a proportion of our total wealth. That is, we invest $w_i$ in $asset_i$ for every $i$, and we always maintain $\sum_{i=1}^{n}w_i=1$ as a condition of being _fully invested_.  
+  
+A portfolio is constructed by investing in different assets. We can express the return and risk of our portfolio by the following equations:  
+  
+  1) $E[R_p] = \sum_{i=1}^{n}w_iE[R_i]$    
+  2) $\sigma^2(R_p) = \sum_{i=1}^{n}w_i^2\sigma^2(R_i)+\sum_i\sum_{j\neq i}w_iw_j\sigma(R_i)\sigma(R_j)\rho_{ij}$ 
+    
+An efficient portfolio is one that maximizes return for a given level of risk. The task at hand is to select the weights ($w_i$) adequately to accomplish this.
+  
+  
+### The Data, structure and manipulation.
+  
+  
+Our dataset is very simple, it comes from Kaggle as mentioned before and right now the quality of the data is not of our concern. That means that the results that we will show are relevant to understand the Markowitz Model but the model we obtain shouldn't be taken to make any investment decisions (yet!).
+
+```{r load_prices}
+precios <- read_delim("prices-split-adjusted.csv",delim = ",")
+str(precios)
+head(precios)
+names(precios)[2] <- "ticker"
+
+length(unique(precios$ticker))
+min(precios$date)
+max(precios$date)
+```
+
+Here i renamed the __Symbol__ column as __ticker__ because i feel more confortable working with that name. It is always best to modify column names for ones that are easier for you to understand. Our dataset consists of 501 different tickers over the last seven years.
+
+  
+Our first manipulations consist in the construction of auxiliary columns, which could be maintained as independent vectors (using the right indexing in R there is no need to merge into a DataFrame) but I prefer to have one dataset with all the relevant information.  
+We will lag our close price and use different lags of the ticker, after properly sorting the dataset, to calculate the daily returns in our data. A purist would have made some analysis on the data prior to this step, but i'm working on the assumption of data quality of acceptable levels. Our newer variables help us identify when a ticker starts, when it ends and it has returns for every day in our sample.  
+Additionally, we include a variable called __index__ which starts at the beggining of each ticker and _accumulates_ returns. This variable is very helpful when estimating Holding Period Returns (HPR) of different lengths, as you only need to divide the ending point over the beggining point (math of this is left to the reader to demonstrate).
+```{r new_dataset}
+precios <- arrange(precios,ticker,date)
+
+
+precio_ant <- c(0,precios$close[1:(dim(precios)[1]-1)])
+ticker_ant <- c("0",precios$ticker[1:(dim(precios)[1]-1)])
+ticker_sig <- c(precios$ticker[2:(dim(precios)[1])],"0")
+nuevos_datos <- as_tibble(list(precio_ant=precio_ant,ticker_ant=ticker_ant,ticker = precios$ticker, ticker_sig = ticker_sig))
+nuevos_datos<- nuevos_datos %>% 
+  mutate(marca = ifelse((ticker_ant==ticker & ticker == ticker_sig),0,ifelse(ticker_ant==ticker,1,-1))) %>% 
+    select(precio_ant,marca)
+precios_n <- cbind(precios,nuevos_datos)
+precios_n <- mutate(precios_n,return = ifelse(marca >=0,log(close/precio_ant),0),year = year(date),
+                    month=month(date),day=day(date))
+index<-100
+for (i in 1:(dim(precios_n)[1])){
+  if (precios_n$marca[i]==-1){
+    index[i] <- 100
+  }
+  else{index[i]<- index[i-1]*(1+precios_n$return[i])}
+}
+precios_n <- cbind(precios_n,index)
+head(precios_n)
+```
+
+With our current dataset, it is possible to explore the performance of any particular ticker by plotting the index vs time. 
+
+```{r time_series, echo=FALSE}
+precios_n[precios_n$ticker=="NFLX",] %>% 
+ggplot(aes(x=date,y=index)) +
+geom_line()
+```
+
+Also, it might be interesting to analyze the distribution of returns:  
+
+```{r distribution}
+precios_n[precios_n$ticker=="NFLX",] %>% 
+  ggplot(aes(x=return)) +
+  geom_histogram(bins=70) +
+  xlab("Daily Returns Netflix") +
+  ylab("Count")+
+  theme_bw()
+```
+  
+But what we really are interested in is not this but the efficient frontier, so let's move on.  
+  
+### The Variance-Covariance Matrix
+  
+  
+There are different approaches to solving for the efficient frontier. The Variance-Covariance Matrix of the returns could be estimated by different methods and for different lengths of time. It is important to notice that, for estimating this matrix for many assets, the amount of error increases as the number of parameters estimated is $\frac{n(n-1)}{2}$.  
+  
+Here, we are going to stay away from all that and focus on the implementation. Using R cov function, we will estimate the daily returns VarCovar matrix. the _use_ parameter controls for missing values, as it will estimate the Covariance pairwise with all available data (pretty neat).  
+  
+Another issue with Markowitz implementation comes from our _Expected Returns_, remember that _Expected_ means that they should incorporate our views. For this exercise, we will our our historical averages but trust me, this is not smart nor correct.
+```{r covar}   
+matrixd <- select(precios_n,year,month,day,ticker,return) %>%
+            spread(key=ticker,value=return) %>% 
+              arrange(year,month,day)
+cov_matd <- cov(matrixd[,-c(1,2,3)],use="pairwise.complete.obs")
+ret_mediasd <- colMeans(matrixd[,-c(1,2,3)],na.rm=T)
+```
+  
+To find our portfolio of minimum variance, first we must establish our _fully invested_ constraint. This is incorporated in our model by a vector of $1's$ that should be exactly $1$ when finding our solution. Notice that, for the time being, we aren't imposing any restriction on short sales (if you're not familiar with this concept, google always has the answer).  
+  
+Let's define our weights vector and constraints:
+```{r parameters}   
+weights <- 0
+weights[1:length(ret_mediasd)] <- 1/length(ret_mediasd)
+equal <- seq(1,1,length.out = (dim(cov_matd)[1]))
+weights <- matrix(weights,ncol=1)
+equal <- matrix(equal,ncol=1)
+b<-1
+```
+
+And we are all set up to start optimizing in search of our efficient frontier!.  
+  
+### At last, the Efficient Frontier.
+  
+  
+Let us begin introducing Quadratic Programming, which refers to solving a particular type of mathematical problems where we want to minimize (or maximize) a quadratic function subject to linear constraints. in particular, we look for solutions to the following problem:  
+  
+minimize $\frac{1}{2}w^TQw+c^Tw$  
+subject to $Aw = b$  
+  
+This is the particular case for our problem, as we haven't added many constraints nor we have any that isn't an equality.  
+  
+To solve this, R has the following function:
+```{r minvar}   
+min_var <- solve.QP(cov_matd,weights,equal,b,meq=1,factorized=T)
+
+w_min_var <- min_var$solution
+sum(w_min_var)
+```
+This is our first solution!  
+  
+What we have done is: Find the weights $w_i$ for each $asset_i$ that minimize our portfolio variance, subject to being _fully invested_.  
+  
+Now, let us use some visualization to understand what we have done.  
+If we plot our assets in a plane where return is a function of risk, we have:
+
+```{r allassets}   
+inst_ret_riesgo <- data.frame(list(retorno =ret_mediasd*360,riesgo =sqrt(diag(cov_matd)*(252))  ))
+retornos <- matrix(ret_mediasd*360, ncol=1)
+restricciones <- matrix(cbind(equal,retornos),ncol=2)
+
+frontera <- matrix(0,nrow=1,ncol=2)
+frontera[1,c(1,2)] <- c(matrix(w_min_var,nrow=1) %*% matrix(ret_mediasd,ncol=1)*360,matrix(w_min_var,nrow=1) %*% cov_matd %*% t(matrix(w_min_var,nrow=1))*sqrt(252))
+inst_ret_riesgo %>% 
+  ggplot(aes(x=riesgo,y=retorno)) +
+  ylim(c(-.4,0.7)) +
+  xlim(c(0,1)) +
+  xlab("Annualized Standard Deviation") +
+  ylab("Expected Return") +
+  geom_point() +
+  geom_point(data=data.frame(list(riesgo=frontera[1,2],retorno=frontera[1,1])),aes(x=riesgo,y=retorno,color="red"),show.legend=F) + 
+  geom_text(data = data.frame(list(riesgo=frontera[1,2],retorno=frontera[1,1])), aes(label = "Min. \n Var."), 
+            vjust = "inward", hjust = "inward") 
+```
+  
+The next step is the most important one, as we are going to generate a couple of matrices to store optimization results from our model.  
+  
+We will store our weights in a matrix called __p_weights__ which will also contain the risk and return of the portfolio. The risk and return will be stored in __frontera__ and our loop is an optimization that adds a constraint to the problem: we will increase the return that we want to achieve and the optimization will help us minimize the variance of the portfolio that achieves such return. Beware of the plot, as out returns axis range has changed.
+
+```{r efficient_frontier}  
+frontera <- matrix(0,nrow=1,ncol=2)
+frontera[1,c(1,2)] <- c(matrix(w_min_var,nrow=1) %*% matrix(ret_mediasd,ncol=1)*360,matrix(w_min_var,nrow=1) %*% cov_matd %*% t(matrix(w_min_var,nrow=1))*sqrt(252))
+
+p_weights <- matrix(c(frontera,w_min_var),ncol=length(c(frontera,w_min_var)))
+colnames(p_weights) <- c("retp","riesgop",colnames(cov_matd))
+for (ret in seq(frontera[1,1]*1.01,5.8,length.out=60)){
+  b <- c(1,ret)
+  optimiza_ret <- solve.QP(cov_matd,weights,restricciones,b,meq=2,factorized=T)
+  frontera <- rbind(frontera,c(matrix(optimiza_ret$solution,nrow=1) %*% matrix(ret_mediasd,ncol=1)*360,matrix(optimiza_ret$solution,nrow=1) %*% cov_matd %*% t(matrix(optimiza_ret$solution,nrow=1))*sqrt(252)))
+  p_weights <- rbind(p_weights,c(c(matrix(optimiza_ret$solution,nrow=1) %*% matrix(ret_mediasd,ncol=1)*360,matrix(optimiza_ret$solution,nrow=1) %*% cov_matd %*% t(matrix(optimiza_ret$solution,nrow=1))*sqrt(252)),optimiza_ret$solution))
+}
+
+front_ef <- data.frame(list(retp = frontera[,1],riesgop = frontera[,2]))
+
+
+
+#y graficamos la frontera eficiente con los instrumentos obtenidos
+inst_ret_riesgo %>% 
+  ggplot(aes(x=riesgo,y=retorno)) +
+  ylim(c(-.4,6)) +
+  xlab("Annualized Standard Deviation") +
+  ylab("Expected Return") +
+  ggtitle("Markowitz Efficient Frontier") +
+  geom_point() +
+  geom_point(data=data.frame(list(riesgo=frontera[1,2],retorno=frontera[1,1])),aes(x=riesgo,y=retorno,color="red"),show.legend=F) + 
+  geom_text(data = data.frame(list(riesgo=frontera[1,2],retorno=frontera[1,1])), aes(label = "Min. \n Var."), 
+            vjust = "inward", hjust = "inward") +
+  geom_path(data=front_ef,size=1,aes(x=riesgop,y=retp, color="red"),show.legend=F)
+```
+  
+Hope you enjoyed the ride from the data to the Efficient Frontier. Next are some different implementations of the model using a variaty of constraints and approaches to estimating the Variance-Covariance Matrix. Stay tuned.

@@ -8,7 +8,7 @@ output:
 
 ## **MXCompFin**
 
-**MXCompFin** is a project born in 2017 with the colaboration between David Montalvan and Gerardo Alcala.
+**MXCompFin** is a project born in 2017 with the colaboration between David Montalván and Gerardo Alcalá.
 
 The main purposes of the project are:
 
@@ -26,3 +26,6 @@ mxcompfin@gmail.com
 ## **Contents**
 
 * [Downloading historical prices from Google Finance (**Python**)](https://mxcompfin.github.io/google_finance)
+
+* [Neat implementation of Markowitz Efficient Frontier (**R**)](https://mxcompfin.github.io/Markowitz)
+
