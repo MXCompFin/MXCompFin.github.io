@@ -25,4 +25,4 @@ mxcompfin@gmail.com
 
 ## **Contents**
 
-* [Downloading historical prices from Google Finance](https://mxcompfin.github.io/google_finance)
+* [Downloading historical prices from Google Finance (**Python**)](https://mxcompfin.github.io/google_finance)

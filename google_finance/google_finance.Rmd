@@ -1,5 +1,6 @@
 ---
 title: "Getting data from Google Finance"
+author: "David Montalván"
 output:
   prettydoc::html_pretty:
     theme: cayman
