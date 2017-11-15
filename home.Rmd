@@ -24,3 +24,5 @@ If you have any comment, feel free to contact us at:
 mxcompfin@gmail.com
 
 ## **Contents**
+
+* [Downloading historical prices from Google Finance](https://mxcompfin.github.io/google_finance)

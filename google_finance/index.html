@@ -12,10 +12,48 @@
 
 
 
-<title>MXCompFin Computational Finance</title>
+<title>Getting data from Google Finance</title>
 
 
 
+<style type="text/css">code{white-space: pre;}</style>
+<style type="text/css">
+div.sourceCode { overflow-x: auto; }
+table.sourceCode, tr.sourceCode, td.lineNumbers, td.sourceCode {
+  margin: 0; padding: 0; vertical-align: baseline; border: none; }
+table.sourceCode { width: 100%; line-height: 100%; }
+td.lineNumbers { text-align: right; padding-right: 4px; padding-left: 4px; color: #aaaaaa; border-right: 1px solid #aaaaaa; }
+td.sourceCode { padding-left: 5px; }
+code > span.kw { color: #007020; font-weight: bold; } /* Keyword */
+code > span.dt { color: #902000; } /* DataType */
+code > span.dv { color: #40a070; } /* DecVal */
+code > span.bn { color: #40a070; } /* BaseN */
+code > span.fl { color: #40a070; } /* Float */
+code > span.ch { color: #4070a0; } /* Char */
+code > span.st { color: #4070a0; } /* String */
+code > span.co { color: #60a0b0; font-style: italic; } /* Comment */
+code > span.ot { color: #007020; } /* Other */
+code > span.al { color: #ff0000; font-weight: bold; } /* Alert */
+code > span.fu { color: #06287e; } /* Function */
+code > span.er { color: #ff0000; font-weight: bold; } /* Error */
+code > span.wa { color: #60a0b0; font-weight: bold; font-style: italic; } /* Warning */
+code > span.cn { color: #880000; } /* Constant */
+code > span.sc { color: #4070a0; } /* SpecialChar */
+code > span.vs { color: #4070a0; } /* VerbatimString */
+code > span.ss { color: #bb6688; } /* SpecialString */
+code > span.im { } /* Import */
+code > span.va { color: #19177c; } /* Variable */
+code > span.cf { color: #007020; font-weight: bold; } /* ControlFlow */
+code > span.op { color: #666666; } /* Operator */
+code > span.bu { } /* BuiltIn */
+code > span.ex { } /* Extension */
+code > span.pp { color: #bc7a00; } /* Preprocessor */
+code > span.at { color: #7d9029; } /* Attribute */
+code > span.do { color: #ba2121; font-style: italic; } /* Documentation */
+code > span.an { color: #60a0b0; font-weight: bold; font-style: italic; } /* Annotation */
+code > span.cv { color: #60a0b0; font-weight: bold; font-style: italic; } /* CommentVar */
+code > span.in { color: #60a0b0; font-weight: bold; font-style: italic; } /* Information */
+</style>
 
 
 
@@ -29,31 +67,105 @@
 
 
 <section class="page-header">
-<h1 class="title toc-ignore project-name">MXCompFin Computational Finance</h1>
+<h1 class="title toc-ignore project-name">Getting data from Google Finance</h1>
 </section>
 
 
 
 <section class="main-content">
-<div id="mxcompfin" class="section level2">
-<h2><strong>MXCompFin</strong></h2>
-<p><strong>MXCompFin</strong> is a project born in 2017 with the colaboration between David Montalvan and Gerardo Alcala.</p>
-<p>The main purposes of the project are:</p>
-<ol style="list-style-type: decimal">
-<li><p><strong>Educational purposes:</strong> We’re not here to make you rich but give you some insights about financial topics we consider interesting and/or relevants.</p></li>
-<li><p><strong>Fill the gap:</strong> We’re looking to fill the gap between mathematical theory and computational implementation of financial models.</p></li>
-</ol>
-</div>
-<div id="disclaimer" class="section level2">
-<h2><strong>Disclaimer</strong></h2>
-<p>Use the material at your own risk, as stated above everything is for <strong>educational purposes only</strong>.</p>
-<p>If you have any comment, feel free to contact us at: <a href="mailto:mxcompfin@gmail.com">mxcompfin@gmail.com</a></p>
-</div>
-<div id="contents" class="section level2">
-<h2><strong>Contents</strong></h2>
+<div id="getting-data-from-google-finance" class="section level2">
+<h2>Getting data from Google Finance</h2>
+<p>In this lecture we’ll create a python code that can be used to download historical prices from <a href="http://finance.google.com/finance">Google Finance</a>.</p>
+<p>The task is a simple one, we just need to find the symbol of the stock and the exchange, and our program will create the appropiate URL ;).</p>
+<p><strong>Note</strong></p>
+<p>Seems that you can’t download historical data for currencies, this method works only for equity instruments.</p>
+<p>Now let’s get started!</p>
+<div id="requirements" class="section level3">
+<h3>Requirements</h3>
+<p>For you to follow this lecture please make sure that you have the following python package installed:</p>
 <ul>
-<li><a href="https://mxcompfin.github.io/google_finance">Downloading historical prices from Google Finance</a></li>
+<li>pandas (I used version 0.18.0 for this lecture).</li>
 </ul>
+</div>
+<div id="explaining-the-url-the-theory" class="section level3">
+<h3>Explaining the URL (The theory)</h3>
+<p>The URL that we’ll need, looks something like this:</p>
+<p><a href="http://finance.google.com/finance/historical?q=BMV:AMXL&amp;startdate=Jan+3+2000&amp;enddate=Nov+11+2017&amp;output=csv" class="uri">http://finance.google.com/finance/historical?q=BMV:AMXL&amp;startdate=Jan+3+2000&amp;enddate=Nov+11+2017&amp;output=csv</a></p>
+<p>At first, this might be daunting but the only parts you have to worry about are:</p>
+<ul>
+<li><p><strong>q=BMV:AMXL</strong> this part makes reference to the exchange where our stock is listed (in this case Bolsa Mexicana de Valores - Mexican Stock Exchange) and the symbol for identifying the company (in this case America Movil Serie L)</p></li>
+<li><p><strong>startdate=Jan+3+2000</strong></p></li>
+<li><p><strong>enddate=Nov+11+2017</strong></p></li>
+</ul>
+<p>I think there is no need for me to explain you the last two parameters you’re smart enough to figure out what they are ;).</p>
+<p>The remaining parts of the URL are kept as they are, so basically our code only needs the above three parameters and no more.</p>
+</div>
+<div id="and-finally-the-code-the-practice" class="section level3">
+<h3>And finally the code (The practice)</h3>
+<div class="sourceCode"><pre class="sourceCode python"><code class="sourceCode python"><span class="im">import</span> pandas <span class="im">as</span> pd
+
+<span class="kw">def</span> getGooglePrices(exchanges,symbols,startDate,endDate):
+    <span class="co">'''</span>
+<span class="co">    Gets historical data from Google Finance</span>
+<span class="co">    Parameters:</span>
+<span class="co">    </span>
+<span class="co">    exchanges = list of the exchanges according to the nomenclature</span>
+<span class="co">    used by Google Finance</span>
+<span class="co">    </span>
+<span class="co">    symbols = list of stock symbols according to the symbols from</span>
+<span class="co">    Google Finance (Same length) as exchanges</span>
+<span class="co">    </span>
+<span class="co">    The correspondance must have the form Ex1:Sym1, Ex2:Sym2,...etc</span>
+<span class="co">    </span>
+<span class="co">    startDate = Start date in format Mmm+dd+yyyy</span>
+<span class="co">    </span>
+<span class="co">    endDate = End date in format Mmm+dd+yyyy</span>
+
+<span class="co">    Output</span>
+<span class="co">    </span>
+<span class="co">    No output, the data is stored in the current working directory</span>
+<span class="co">    as CSV file.</span>
+<span class="co">    </span>
+<span class="co">    '''</span>
+    <span class="co">#Declare the static parts of the URL</span>
+    urlStatic1<span class="op">=</span><span class="st">&quot;http://finance.google.com/finance/historical?q=&quot;</span>
+    urlStatic2<span class="op">=</span><span class="st">&quot;&amp;output=csv&quot;</span>
+
+    <span class="co">#Create the dynamic parts of the url and downloads a file</span>
+    <span class="co">#per symbol</span>
+    
+    <span class="cf">for</span> i <span class="kw">in</span> <span class="bu">range</span>(<span class="dv">0</span>,<span class="bu">len</span>(exchanges)):
+        quote<span class="op">=</span>exchanges[i] <span class="op">+</span> <span class="st">&quot;:&quot;</span> <span class="op">+</span> symbols[i]
+        url<span class="op">=</span>urlStatic1 <span class="op">+</span> quote <span class="op">+</span> <span class="st">&quot;&amp;startdate=&quot;</span> <span class="op">+</span> startDate<span class="op">\</span>
+        <span class="op">+</span> <span class="st">&quot;&amp;enddate=&quot;</span> <span class="op">+</span> endDate <span class="op">+</span> urlStatic2
+            
+        <span class="co">#Read the data from the url</span>
+        data<span class="op">=</span>pd.read_csv(url)
+            
+        <span class="co">#Save it in the current directory</span>
+        <span class="co">#Removes the column index</span>
+        fileName<span class="op">=</span>exchanges[i] <span class="op">+</span> <span class="st">&quot;_&quot;</span> <span class="op">+</span> symbols[i] <span class="op">+</span> <span class="st">&quot;.csv&quot;</span>
+        data.to_csv(fileName,index<span class="op">=</span><span class="va">False</span>)</code></pre></div>
+</div>
+<div id="testing-the-code" class="section level3">
+<h3>Testing the code</h3>
+<p>Now let’s test our code with the following examples</p>
+<div class="sourceCode"><pre class="sourceCode python"><code class="sourceCode python">exchanges<span class="op">=</span>[<span class="st">&quot;BMV&quot;</span>,<span class="st">&quot;BMV&quot;</span>,<span class="st">&quot;NYSEARCA&quot;</span>]
+symbols<span class="op">=</span>[<span class="st">&quot;AMXL&quot;</span>,<span class="st">&quot;KOFL&quot;</span>,<span class="st">&quot;SPY&quot;</span>]
+startDate<span class="op">=</span><span class="st">&quot;Jan+01+2017&quot;</span>
+endDate<span class="op">=</span><span class="st">&quot;Nov+10+2017&quot;</span>
+getGooglePrices(exchanges,symbols,startDate,endDate)</code></pre></div>
+<p>The above lines should have created 3 CSV files each containing the historical prices from January 3rd 2017 (01 and 02 were not working days) up to and including November 10th 2017.</p>
+<p>Try with your own symbols.</p>
+</div>
+<div id="conclusion" class="section level3">
+<h3>Conclusion</h3>
+<p>As you can see, the code has not error handlers so make sure that the symbols and exchanges you enter are the correct ones.</p>
+<p>Also you can implement a little function so you can read these variables from a csv file avoiding you having to type them manually, but I won’t take all the fun from you :)</p>
+<p>Hope you find the above useful</p>
+<p>Thanks for reading!</p>
+<p><a href="https://davidrmh.github.io/">Home Page</a></p>
+</div>
 </div>
 </section>
 

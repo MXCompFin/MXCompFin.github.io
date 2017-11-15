@@ -1,0 +1,121 @@
+---
+title: "Getting data from Google Finance"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+## Getting data from Google Finance
+
+In this lecture we'll create a python code that can be used to download historical prices from [Google Finance](http://finance.google.com/finance).
+
+The task is a simple one, we just need to find the symbol of the stock and the exchange, and our program will create the appropiate URL ;).
+
+**Note**
+
+Seems that you can't download historical data for currencies, this method works only for equity instruments.
+
+Now let's get started!
+
+### Requirements
+
+For you to follow this lecture please make sure that you have the following python package installed:
+
+* pandas (I used version 0.18.0 for this lecture).
+
+### Explaining the URL (The theory)
+
+The URL that we'll need, looks something like this:
+
+http://finance.google.com/finance/historical?q=BMV:AMXL&startdate=Jan+3+2000&enddate=Nov+11+2017&output=csv
+
+At first, this might be daunting but the only parts you have to worry about are:
+
+* **q=BMV:AMXL** this part makes reference to the exchange where our stock is listed (in this case Bolsa Mexicana de Valores - Mexican Stock Exchange) and the symbol for identifying the company (in this case America Movil Serie L)
+
+* **startdate=Jan+3+2000**
+
+* **enddate=Nov+11+2017** 
+
+I think there is no need for me to explain you the last two parameters you're smart enough to figure out what they are ;).
+
+The remaining parts of the URL are kept as they are, so basically our code only needs the above three parameters and no more. 
+
+### And finally the code (The practice)
+
+```{python, engine.path='/home/david/anaconda2/bin/python',eval=FALSE}
+import pandas as pd
+
+def getGooglePrices(exchanges,symbols,startDate,endDate):
+    '''
+    Gets historical data from Google Finance
+    Parameters:
+    
+    exchanges = list of the exchanges according to the nomenclature
+    used by Google Finance
+    
+    symbols = list of stock symbols according to the symbols from
+    Google Finance (Same length) as exchanges
+    
+    The correspondance must have the form Ex1:Sym1, Ex2:Sym2,...etc
+    
+    startDate = Start date in format Mmm+dd+yyyy
+    
+    endDate = End date in format Mmm+dd+yyyy
+
+    Output
+    
+    No output, the data is stored in the current working directory
+    as CSV file.
+    
+    '''
+    #Declare the static parts of the URL
+    urlStatic1="http://finance.google.com/finance/historical?q="
+    urlStatic2="&output=csv"
+
+    #Create the dynamic parts of the url and downloads a file
+    #per symbol
+    
+    for i in range(0,len(exchanges)):
+        quote=exchanges[i] + ":" + symbols[i]
+        url=urlStatic1 + quote + "&startdate=" + startDate\
+        + "&enddate=" + endDate + urlStatic2
+            
+        #Read the data from the url
+        data=pd.read_csv(url)
+            
+        #Save it in the current directory
+        #Removes the column index
+        fileName=exchanges[i] + "_" + symbols[i] + ".csv"
+        data.to_csv(fileName,index=False)
+
+```
+
+### Testing the code
+
+Now let's test our code with the following examples
+
+```{python,engine.path='/home/david/anaconda2/bin/python',eval=FALSE}
+exchanges=["BMV","BMV","NYSEARCA"]
+symbols=["AMXL","KOFL","SPY"]
+startDate="Jan+01+2017"
+endDate="Nov+10+2017"
+getGooglePrices(exchanges,symbols,startDate,endDate)
+```
+
+The above lines should have created 3 CSV files each containing the historical prices from January 3rd 2017 (01 and 02 were not working days) up to and including November 10th 2017.
+
+Try with your own symbols.
+
+### Conclusion
+
+As you can see, the code has not error handlers so make sure that the symbols and exchanges you enter are the correct ones.
+
+Also you can implement a little function so you can read these variables from a csv file avoiding you having to type them manually, but I won't take all the fun from you :)
+
+Hope you find the above useful
+
+Thanks for reading!
+
+[Home Page](https://davidrmh.github.io/)
