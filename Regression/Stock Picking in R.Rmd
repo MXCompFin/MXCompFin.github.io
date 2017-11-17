@@ -1,0 +1,553 @@
+---
+title: "Stock Picking in R"
+author: "Gerardo Alcala"
+date: "16 de noviembre de 2017"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(readr)
+library(dplyr)
+library(lubridate)
+library(tidyr)
+library(reshape2)
+library(stringr)
+library(lazyeval)
+library(knitr)
+library(kernlab)
+library(lazyeval)
+library(ggplot2)
+library(glue)
+library(quadprog)
+library(purrr)
+library(caret)
+library(quantmod)
+library(ISLR)
+library(forecast)
+library(Hmisc)
+library(gridExtra)
+library(optimx)
+library(glue)
+library(purrr)
+library(caret)
+library(quantmod)
+library(ISLR)
+library(forecast)
+library(rattle)
+library(prettydoc)
+library(DescTools)
+library(DescToolsAddIns)
+```
+
+# Applying Regression to stock returns in R
+  
+### Introduction.
+  
+When faced with the challenge to outperform the market (that is, to obtain abnormal returns consistently through time, not explained by the systematic risk taken), the paths that can be taken are plenty and very diverse in nature. If the market we are exploring is the equities market in particular, outperforming the market could be simplified as _picking the companies that will generate the greater returns_. I'm a firm believer that an exhaustive fundamental analysis of each of these companies would provide the investor with the knowledge to better allocate her resources, effectively obtaining this abnormal returns (also known in the industry as __Alpha__).  
+  
+Fundamental analysis requires a great amount of expertise, as you must understand the industry, the economic enviroment of both the country and the company under analysis, and of course the idiosyncratic business model of every player in the sector. As you might have guessed, this is time consuming and can't (yet) be automated, so assigning an analyst to focus on a particular company and thoroughly study an investment recommendation should be done efficiently, i.e., not analysing every single company but some that may promise achiving greater returns.
+
+This work is a follow up of our previous [Markowitz Efficient Frontier](https://mxcompfin.github.io/Markowitz/Markowitz.html) and some of our insights shown there will continue to be used here, so i would recomend you to read it quickly before moving forward.
+  
+  
+### The Data: Structure and manipulation.
+  
+  
+Out data set comes from [kaggle: New York Stock Exchange dataset](https://www.kaggle.com/dgawlik/nyse) again, but we are going to explore the different tables that are available, in particular, the dataset containing variables from financial statements and data related to the securities. Let us load these tables.  
+  
+
+```{r loading_data,eval=TRUE, results="hide", error=FALSE, message=FALSE,warning=FALSE}
+fundamentales <- read_delim("fundamentals.csv",delim = ",")
+securities <- read_delim("securities.csv",delim = ",")
+
+names(securities) <-c("ticker","security","SECFilings","GICS","industry","address","firstAdded","CIK")
+str(securities)
+```
+
+When working with data like these datasets it is important to get familiar with the information contained and the structure of it. The following lines of code is an example of the different tests and summary tables that i was creating along the way of finding what kind of data we had and if any relevant data was missing (in the particular case of the fundamentals, the variable __for Year__ was very important and had missings) and in case of finding missings, could they be filled with enough confidence as to maintain the integrity of the data (my analysis concluded that the answer was YES!). This last point is very important, as keeping a couple of extra registers can have relevant impacts when the datasets are small.
+
+```{r data_manip, eval=TRUE, results="hide",error=FALSE, message=FALSE,warning=FALSE}
+#Analizamos la informacion que disponemos para seleccionar empresas
+str(fundamentales)
+
+head(fundamentales,6)
+nombres <- names(fundamentales)
+nombres[c(1,2,3)] <- c("obs","ticker","period")
+nombres
+names(fundamentales)<-nombres
+
+#Exploramos el dataset de EEFF y observamos que existen 448 tickers únicos
+group_by(fundamentales,ticker) %>% 
+  summarise(numero = n()) %>% 
+  arrange(ticker)
+
+#Las fechas únicas de los EEFF son 162
+group_by(fundamentales,period) %>% 
+  summarise(numero = n()) %>% 
+  arrange(desc(period))
+
+#Pero la variable que nos permite identificar el año de los EEFF es For Year
+group_by(fundamentales,`For Year`) %>% 
+  summarise(numero = n()) %>% 
+  arrange(desc(`For Year`))
+
+fundamentales <- mutate(fundamentales,forYear = `For Year`)
+
+
+dup <- group_by(fundamentales,ticker,forYear) %>% 
+                      summarise(numero = n()) %>% 
+                      arrange(desc(ticker,forYear)) %>% 
+                        ungroup() %>% 
+                          filter(!is.na(forYear)) %>% 
+                            filter(numero >= max(numero))
+
+#lo que hemos detectado es que son muy pocas las empresas que no tienen info financiera
+#y son aún menos las que tienen años repetidos (en realidad son 6)
+
+veamos_dup <- filter(fundamentales,ticker %in% c((dup$ticker))) %>% 
+                arrange(ticker,forYear)
+
+
+
+as.data.frame(veamos_dup[,c("ticker","period","forYear")])
+
+
+#corregimos el error detectado
+fundamentales[fundamentales$ticker %in% c((dup$ticker)),]$forYear <- year(fundamentales[fundamentales$ticker %in% c((dup$ticker)),]$period)
+
+fundamentales[fundamentales$ticker %in% c((dup$ticker)),c("ticker","period","forYear")]
+
+fundamentales <- mutate(fundamentales,year=year(period),month=month(period))
+
+
+missing <- group_by(fundamentales,ticker,forYear) %>% 
+  summarise(numero = n()) %>% 
+    arrange(desc(ticker,forYear)) %>% 
+      ungroup() %>% 
+        filter(is.na(forYear))
+
+veamos_missing <- filter(fundamentales,ticker %in% c((missing$ticker))) %>% 
+  arrange(ticker,forYear)
+
+as_tibble(as.data.frame(list(veamos_missing[,c("ticker","period","forYear")],year=year(veamos_missing$period)))) %>% 
+  group_by(ticker,year) %>% 
+    summarise(n=n()) %>% 
+  ungroup() %>% 
+  filter(n >= 2)
+
+corregir <- veamos_missing[!(veamos_missing$ticker %in% c("CERN","HBI","SNA","SWK")),]$ticker
+corregir <- unique(corregir)
+
+#corregimos el error detectado
+fundamentales[fundamentales$ticker %in% c((corregir)),]$forYear <- year(fundamentales[fundamentales$ticker %in% c((corregir)),]$period)
+
+missing <- group_by(fundamentales,ticker,forYear) %>% 
+  summarise(numero = n()) %>% 
+  arrange(desc(ticker,forYear)) %>% 
+  ungroup() %>% 
+  filter(is.na(forYear))
+
+veamos_missing <- filter(fundamentales,ticker %in% c((missing$ticker))) %>% 
+  arrange(ticker,forYear)
+
+veamos_missing[,c("ticker","period","forYear")]
+
+
+#corregimos el error detectado
+fundamentales[(fundamentales$ticker %in% c("CERN","HBI","SWK") & is.na(fundamentales$forYear)),]$forYear <-2016
+
+fundamentales[fundamentales$ticker %in% c("SNA"),]$forYear <- c(2013,2014,2015,2016)
+
+sum(is.na(fundamentales$forYear))
+
+#Comenzamos el análisis
+fund_2015 <- group_by(fundamentales,ticker,forYear)
+
+names(fund_2015)
+#2,3,10,11,13,14,15,19,23,25,26,31,32,33,34,38,39,40,41,42,47,49,59,59,61,62,64,67,69,70,71,72,73,74,75,77,78,79,80,81
+
+fund_2015 <- fund_2015[,(c(2,3,10,11,13,14,15,19,23,25,26,31,32,33,34,38,39,40,41,42,47,49,59,61,62,64,67,69,70,71,72,73,74,75,77,78,79,80,81))]
+names(fund_2015)
+
+comp <- cbind(names(fund_2015),c("ticker","period","CashRatio","Cash","CommonStocks","CostOfRevenue","CurrentRatio","EBIT","FixedAssets","GrossMargin","GrossProfit",
+                                 "Investments","Liabilities","LongTermDebt","LongTermInvestments","NetCashFlow","NCFOperations", "NCFFinancing","NCFInvesting","NetIncome","NonRItems","OperatingMargin","PreTaxMargin","ProfitMargin",
+                                 "QuickRatio","RetainedEarnings","STBtoCPLTB","TotalAssets","CurrentAssets","CurrentLiabilities","Equity","TotalLiabilities","LiabPlusEquity","Revenue","oldFY","EPS","SharesOutstanding","forYear","year"))
+comp
+
+names(fund_2015) <- c("ticker","period","CashRatio","Cash","CommonStocks","CostOfRevenue","CurrentRatio","EBIT","FixedAssets","GrossMargin","GrossProfit",
+                      "Investments","Liabilities","LongTermDebt","LongTermInvestments","NetCashFlow","NCFOperations", "NCFFinancing","NCFInvesting","NetIncome","NonRItems","OperatingMargin","PreTaxMargin","ProfitMargin",
+                      "QuickRatio","RetainedEarnings","STBtoCPLTB","TotalAssets","CurrentAssets","CurrentLiabilities","Equity","TotalLiabilities","LiabPlusEquity","Revenue","oldFY","EPS","SharesOutstanding","forYear","year")
+
+names(fund_2015)
+
+info <- inner_join(fund_2015,securities,by="ticker")
+
+print(info)
+str(info)
+info <- mutate(info,GICS = factor(GICS),industry = factor(industry),SECFilings = factor(SECFilings),CIK=factor(CIK))
+
+str(info)
+```
+
+Another important step in our data preparation was the renaming of relevant variables. If you plan to continue the analysis of this datasets you can obtain very different results just by adding variables that i decided to remove. The reason I'm keeping these subset only is because my plan is to build ratios rather than input the raw data, as it is common in the investment industry to do so to relativize the size of the financial statement accounts this way.  
+  
+The next lines of code are related to our prices dataset. We need to estimate returns from these prices on each ticker and different periods. The rationale that we are going to apply to do this is the following:  
+  
+1. Our financial statements are for periods ending December year 20XX
++ If we would use this information to decide on what companies to invest, we would look at the following year's return, thus:  
+2. We will estimate our returns for periods of 1 year, starting January 1st and ending December 31st for every year at out disposal, as well as their respective risk (standard deviation).  
+3. When including these variables into our dataset, we will also add our _"leadReturn"_ which corresponds to the performance of a specific company on the year _following_ the financial statements, i.e, our __Independent Variable__.  
+
+```{r precios, results="hide"}
+precios <- read_delim("prices-split-adjusted.csv",delim = ",")
+str(precios)
+head(precios)
+names(precios)[2] <- "ticker"
+precios <- arrange(precios,ticker,date)
+
+
+precio_ant <- c(0,precios$close[1:(dim(precios)[1]-1)])
+ticker_ant <- c("0",precios$ticker[1:(dim(precios)[1]-1)])
+ticker_sig <- c(precios$ticker[2:(dim(precios)[1])],"0")
+nuevos_datos <- as_tibble(list(precio_ant=precio_ant,ticker_ant=ticker_ant,ticker = precios$ticker, ticker_sig = ticker_sig))
+nuevos_datos<- nuevos_datos %>% 
+  mutate(marca = ifelse((ticker_ant==ticker & ticker == ticker_sig),0,ifelse(ticker_ant==ticker,1,-1))) %>% 
+    select(precio_ant,marca)
+precios_n <- cbind(precios,nuevos_datos)
+precios_n <- mutate(precios_n,return = ifelse(marca >=0,log(close/precio_ant),0),year = year(date),
+                    month=month(date),day=day(date))
+index<-100
+for (i in 1:(dim(precios_n)[1])){
+  if (precios_n$marca[i]==-1){
+    index[i] <- 100
+  }
+  else{index[i]<- index[i-1]*(1+precios_n$return[i])}
+}
+precios_n <- cbind(precios_n,index)
+head(precios_n)
+```
+
+```{r preciosss, results="hide"}
+precios_y <- group_by(precios_n,year,ticker) %>% 
+  mutate(inicio = first(index),final = last(index)) %>% 
+  summarise(stddev = sd(return)*sqrt(252),inicio = min(inicio), final = max(final)) %>% 
+  mutate(return = log(final/inicio)) %>% 
+  ungroup()
+
+lead_return <- dplyr::select(precios_y,year,ticker,return) %>% 
+                dplyr::rename(forYear=year, leadReturn=return) %>% 
+                    mutate(yearLeadReturn=forYear,forYear = forYear - 1)
+                  
+dplyr::rename(precios_y,yearReturn = return,yearStdDev = stddev)
+
+info <- mutate(info,year_eeff =forYear)
+base <- inner_join(info,precios_y,by=(c("ticker"="ticker","forYear"="year")))
+base <- inner_join(base,lead_return,by=(c("ticker"="ticker","forYear"="forYear")))
+print(base)
+
+table(base$year_eeff)
+```
+  
+### The model: Generalized Linear Regression with a classification approach.
+  
+  
+After all the hard work of processing the data, at last we have arrived at a stage of finding a good model for our data. This next section will focus on the design, analysis and visualization of the variables that we want to introduce in the model.  
+  
+Specifically, everytime I say model I have something like this in mind:  
+  
+  $R_{j,year_{t+1}} = \hat{\beta_0} + \sum_i^n\hat{\beta_i}X_{i,j}$
+  
+Where each $R_{j,year_{t+1}}$ corresponds to the return next year for company $j$ and $X_{i,j}$ represents a _feature_ of company $j$ in year $t$, or previous year.  
+
+#### Exploring the features  
+  
+There are many differents graphs and tests that should be made to explore the features to include in your model, I'm going to give a few examples here but this part of the modeling is more an art than science: it takes time and inspiration.  
+  
+Our first step is splitting the sample in a __training sample__, from which we will obtain the parameters of our model through estimation; and a __testing sample__, on which we will test our model's performance. It is worth noting that, statistically speaking, our _features_ are not independent (because we are sampling from the _same companies_ over different years). This will be addressed on further submissions, but bear with me on this as the purpose of this exercise is to show steps to create a model.
+  
+Aditionally to sampling, we'll construct some features as ratios coming from the financial statements and we will _winsorize_ them, which is explained [here] (https://en.wikipedia.org/wiki/Winsorizing).
+```{r gnrt_sample1, results="hide"}
+training <- base[base$year_eeff %in% c(2012,2013),]
+testing <- base[!(base$year_eeff %in% c(2012,2013)),]
+```
+```{r gnrt_sample}
+#Vamos a ir iterando nuestro algoritmo sobre distintas ventanas de tiempo 
+#Para ver qué sucede con el modelo
+training <- base[base$year_eeff %in% c(2012,2013),]
+testing <- base[!(base$year_eeff %in% c(2012,2013)),]
+
+
+colSums(is.na(training))/dim(training)[1]*100
+
+#Tratemos de construir algunas variables que nos hagan sentido para explicar los retornos futuros, en particular, 
+#Buscaremos 
+training <- mutate(training,leverage= TotalAssets/TotalLiabilities,debtToEquity = TotalLiabilities/Equity, 
+                   EBITtoAssets = EBIT/TotalAssets, EBITtoEquity = EBIT/Equity, NCFtoEquity = NetCashFlow/Equity,
+                   InvestToRetainedEarnings = Investments/RetainedEarnings)
+names(training)
+
+#Windsorize at 5%
+training <- mutate(training,
+                   leverage= max(min(quantile(training$leverage,.95),leverage),quantile(training$leverage,.05)),
+                   debtToEquity= max(min(quantile(training$debtToEquity,.95),debtToEquity),quantile(training$debtToEquity,.05)),
+                   EBITtoAssets= max(min(quantile(training$EBITtoAssets,.95),EBITtoAssets),quantile(training$EBITtoAssets,.05)),
+                   EBITtoEquity= max(min(quantile(training$EBITtoEquity,.95),EBITtoEquity),quantile(training$EBITtoEquity,.05)),
+                   NCFtoEquity= max(min(quantile(training$NCFtoEquity,.95),NCFtoEquity),quantile(training$NCFtoEquity,.05)),
+                   InvestToRetainedEarnings= max(min(quantile(training$InvestToRetainedEarnings,.95),InvestToRetainedEarnings),quantile(training$InvestToRetainedEarnings,.05))
+)
+```
+  
+Different exploration tools are available in R to visualize data. What we are looking for are features that have any relationship with our independent variable and also have familiar shapes. To observe relationships between variables we can always use a _featurePlot_.
+
+```{r feaplot}
+featurePlot(x=training[,c("leverage","debtToEquity","EBITtoAssets","EBITtoEquity")],y=training$leadReturn,plot="pairs")
+```
+  
+Another example is a scatterplot with fitted linear models in it. In this case I'm splitting the training sample per year to observe if the relationship is the same both periods.
+
+```{r qqplot,error=FALSE, message=FALSE,warning=FALSE}
+qq <- qplot(leverage,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+```
+  
+This has to be done for differents features, I will spare you the code but not the plots!  
+
+```{r qqplot2,echo=FALSE,error=FALSE, message=FALSE,warning=FALSE}
+qq <- qplot(debtToEquity,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(EBITtoAssets,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(EBITtoEquity,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(NCFtoEquity,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(OperatingMargin,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(PreTaxMargin,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(ProfitMargin,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(return,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+
+qq <- qplot(stddev,leadReturn,color = factor(forYear),data=training)
+qq + geom_smooth(method = 'lm', formula = y~x)
+```
+  
+Next, we are going to explore our features standarized, as we will input them in the model this way:
+  
+  
+```{r scaling,results="hide"}
+escalas <- preProcess(as.data.frame(training[,c(10,22,23,24,54:59)]),method=c("center","scale"))
+training_esc <- predict(escalas,as.data.frame(training[,c(10,22,23,24,54:59)]))
+training_esc <- as_tibble(training_esc)
+```
+  
+Another useful R function to explore data is _Desc_:
+
+```{r desc}
+DescTools::Desc(training_esc)
+
+```
+  
+Clearly, Investment to Earnings has issues on the distribution, further testing shows that it can't be incorporated in the model (very little variability). These and other conclusions can be made from these plots to understand what we are doing in the modeling stage.  
+  
+When analyzing a continous response variable, sometimes it is also useful to define groups of it to study different distributions of the features for levels of the dependent variable.
+  
+```{r cat}
+class_return <- cut2(training$leadReturn,g=3)
+training <- cbind(training,class_return=class_return)
+
+featurePlot(x = training[, c(10,22,23,24)], 
+            y = training$class_return,
+            plot = "density", 
+            ## Pass in options to xyplot() to 
+            ## make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(4, 1), 
+            auto.key = list(columns = 3))
+
+featurePlot(x = training[, c(54:57)], 
+            y = training$class_return,
+            plot = "box", 
+            ## Pass in options to xyplot() to 
+            ## make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(4, 1), 
+            auto.key = list(columns = 3))
+
+featurePlot(x = training[, c(58:59)], 
+            y = training$class_return,
+            plot = "box", 
+            ## Pass in options to xyplot() to 
+            ## make it prettier
+            scales = list(x = list(relation="free"), 
+                          y = list(relation="free")), 
+            adjust = 1.5, 
+            pch = "|", 
+            layout = c(2, 1), 
+            auto.key = list(columns = 3))
+
+```
+  
+#### Calibrating the model
+  
+If you're still reading this, at last it's time to model!  
+We are modeling a linear relationship to the data, the features included in the model come from our exploratory analysis. Our first attempt will only include financial data and GICS classification. Let's see how it comes out:  
+
+```{r model}
+modFit_glm <- train(leadReturn~GrossMargin+OperatingMargin+PreTaxMargin+ProfitMargin+
+                    leverage+ debtToEquity+EBITtoAssets+EBITtoEquity+NCFtoEquity+GICS,method="glm",preProcess=c("center","scale"),data=training)
+
+summary(modFit_glm)
+```
+  
+Not bad in any way, as some variables are statistically significant. The sign of the coefficients is open to discussion and should be taken to experts to understand why some are counter-intuitive (we prefer companies with lower Operating Margins, for example) but it isn't all lost, as sometimes asset managers invest in companies that aren't performing well in the short-term to profit big long-term.
+  
+Let us think for a minute what kind of model we are trying to obtain: as I said before, we aren't really interested in fitting our data to predict future returns explicitly, but rather use this predicted return as a ranking, relative to the rest of the stocks considered in our analysis, to _filter_ the companies that our best analysts will focus on.  
+  
+Either way, our next steps always should be to test if the model is fitting the data correctly. To do this, I will attach some code but i won't dig deeper into it, it's left to the reader to understand (you can ask me, of course).
+```{r statis_anal, eval=FALSE}
+#Revisamos el ajuste del modelo, primero analizamos los puntos de high leverage
+lev <- hat(model.matrix(modFit_glm$finalModel))
+#se detectan un par, pero no muchos
+plot(lev)
+
+#A continuación analizamos los residuos estandarizados
+
+res_student <- rstudent(modFit_glm$finalModel)
+cook = cooks.distance(modFit_glm$finalModel)
+plot(cook,ylab="Cooks distances")
+points(which(lev>.2),cook[which(lev>.2)],col='red')
+
+par(mfrow=c(1,3))
+plot(training$GrossMargin, res_student, xlab="Gross Margin", ylab="Studentized Residuals")
+plot(training$OperatingMargin, res_student,xlab="Operating Margin", ylab="Studentized Residuals")
+plot(modFit_glm$finalModel$fitted.values, res_student,xlab="Valores Ajustados", ylab="Studentized Residuals")
+
+par(mfrow=c(1,2))
+qqnorm(res_student)
+qqline(res_student)
+
+hist(res_student, freq=FALSE, 
+     main="Distribution of Residuals")
+xfit<-seq(min(res_student),max(res_student),length=40) 
+yfit<-dnorm(xfit) 
+lines(xfit, yfit)
+
+spreadLevelPlot(modFit_glm$finalModel)
+```
+  
+Being said that, what we really want is use this model to predict a subset of companies that outperform. Let us explore the effectiveness of this model to find companies that, on average, outperform the others.
+
+```{r,testin1}
+#Ahora probemos cómo funciona en el futuro:
+
+testing <- mutate(testing,leverage= TotalAssets/TotalLiabilities,debtToEquity = TotalLiabilities/Equity, 
+                  EBITtoAssets = EBIT/TotalAssets, EBITtoEquity = EBIT/Equity, NCFtoEquity = NetCashFlow/Equity,
+                  InvestToRetainedEarnings = Investments/RetainedEarnings)
+names(testing)
+dim(testing)
+length(predict(modFit_glm,testing))
+testing[is.na(testing$InvestToRetainedEarnings),]$InvestToRetainedEarnings <- c(0,0)
+
+port_predict <- data.frame(list(testing,return_pred = predict(modFit_glm,testing)))
+port_predict <- as.tbl(port_predict)
+
+port_predict <- group_by(port_predict,forYear) %>% 
+                  mutate(ranking = rank(return_pred),class = ifelse(ranking <=170,0,ifelse(ranking<=340,1,2))) %>% 
+                    ungroup()
+
+port_predict$class <- factor(port_predict$class,labels=c("LP","MP","HP"))
+
+#No funciona muy bien, ya que en el 2014 sí nos consigue el mejor portafolio pero no en el 2015.
+port_predict %>% group_by(forYear,class) %>% 
+  summarise(return = mean(leadReturn),minimo=min(leadReturn),maximo=max(leadReturn), std=sd(leadReturn))
+
+```
+  
+That last table summarises our findings: We have ordered the stocks using financial data for years 2014 and 2015, and we have estimated the returns of these stocks for 2015 and 2016 respectively. What the table shows is that, for 2014, we are able to predict the Highest performing subset of the three, but in 2015 we do quite poorly.  
+  
+After a lot of hard work (not shown here) we can conclude that we are missing a very important feature to our model: the past return of the stock. This past return isn't strong to predict future returns (Efficient Market Hypothesis guys) but it can help discriminate among stocks.  
+  
+```{r model_return}
+modFit_glm2 <- train(leadReturn~return+GrossMargin+OperatingMargin+PreTaxMargin+ProfitMargin+
+                       leverage+ debtToEquity+EBITtoAssets+EBITtoEquity+NCFtoEquity
+                       +GICS,method="glm",preProcess=c("center","scale"),data=training)
+summary(modFit_glm2)
+
+```
+  
+Always analyze the fitted model.
+
+```{r review, eval=FALSE}
+#Revisamos el ajuste del modelo, primero analizamos los puntos de high leverage
+lev <- hat(model.matrix(modFit_glm2$finalModel))
+#se detectan un par, pero no muchos
+plot(lev)
+
+#A continuación analizamos los residuos estandarizados
+
+res_student <- rstudent(modFit_glm2$finalModel)
+cook = cooks.distance(modFit_glm2$finalModel)
+plot(cook,ylab="Cooks distances")
+points(which(lev>.2),cook[which(lev>.2)],col='red')
+
+par(mfrow=c(1,3))
+plot(training$GrossMargin, res_student, xlab="Gross Margin", ylab="Studentized Residuals")
+plot(training$OperatingMargin, res_student,xlab="Operating Margin", ylab="Studentized Residuals")
+plot(modFit_glm2$finalModel$fitted.values, res_student,xlab="Valores Ajustados", ylab="Studentized Residuals")
+
+par(mfrow=c(1,2))
+qqnorm(res_student)
+qqline(res_student)
+
+hist(res_student, freq=FALSE, 
+     main="Distribution of Residuals")
+xfit<-seq(min(res_student),max(res_student),length=40) 
+yfit<-dnorm(xfit) 
+lines(xfit, yfit)
+
+ggplot(aes(x=return,y=predict(modFit_glm2,testing),color=year_eeff),data=testing)+
+  geom_point() +
+  geom_smooth(method="lm") +
+  geom_abline(slope=1,intercept=0)
+
+
+```
+```{r final_result}
+port_predict2 <- data.frame(list(testing,return_pred = predict(modFit_glm2,testing)))
+port_predict2 <- as.tbl(port_predict2)
+
+port_predict2 <- group_by(port_predict2,forYear) %>% 
+  mutate(ranking = rank(return_pred),class = ifelse(ranking <=170,0,ifelse(ranking<=340,1,2))) %>% 
+  ungroup()
+
+port_predict2$class <- factor(port_predict2$class,labels=c("LP","MP","HP"))
+
+as.data.frame(port_predict2 %>% group_by(forYear,class) %>% 
+  summarise(n=n(),return = mean(leadReturn),minimo=min(leadReturn),maximo=max(leadReturn), std=sd(leadReturn), pseudo_Sharpe= return/std))
+
+```
+  
+  Eureka! This model can filter some stocks nicely. In a sense, in 2014 we managed to find 94 stocks than, on average, had a sharpe that was twice and trice as big as the other 2 groups. For 2014 we didn't do as well yet we managed to double the worst performing group's pseudo Sharpe (no risk free included).  
+    
+  Hope you guys enjoyed this work, if any questions arise let me know.

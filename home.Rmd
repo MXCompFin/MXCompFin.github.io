@@ -8,7 +8,7 @@ output:
 
 ## **MXCompFin**
 
-**MXCompFin** is a project born in 2017 with the colaboration between David Montalván and Gerardo Alcalá.
+**MXCompFin** is a project born in 2017 with the collaboration between David Montalván and Gerardo Alcalá.
 
 The main purposes of the project are:
 
@@ -20,7 +20,7 @@ The main purposes of the project are:
 
 Use the material at your own risk, as stated above everything is for **educational purposes only**.
 
-If you have any comment, feel free to contact us at:
+If you have any comments, feel free to contact us at:
 mxcompfin@gmail.com
 
 ## **Contents**
@@ -29,3 +29,4 @@ mxcompfin@gmail.com
 
 * [Neat implementation of Markowitz Efficient Frontier (**R**)](https://mxcompfin.github.io/Markowitz/Markowitz.html)
 
+* [Filtering Stocks using a Regression Model (**R**)](https://mxcompfin.github.io/Regression/Stock_Picking_in_R.html)
