@@ -1,0 +1,420 @@
+---
+title: "Black Litterman"
+author: "Gerardo Alcala"
+date: "December 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(tidyquant)
+library(quadprog)
+library(ggplot2)
+library(igraph)
+
+
+eom <- function(date){
+  mes = month(date)
+  ano = year(date)
+  if (mes == 12){
+    fecha = 1010000 + (ano + 1)
+  }
+  else{
+    fecha = (mes+1)*1000000+10000+ano
+  }
+  return(mdy(fecha)-1)
+}
+```
+
+## Black Litterman - A Bayesian approach to asset allocation
+
+Mean-variance optimization makes sense when explained conceptually, if you're confortable with the principles outlined by modern portfolio theory. The unsolvable questions arise when applying the precepts of this framework in real world application. Asset managers need to input Expected Returns into a model and, through a Variance-Covariance Matrix, obtain efficient portfolios. Variance-Covariance Matrix can be obtained from historical data, and assumptions of it's persistence through time is often made. Expected Returns, on the other hand, are extremely difficult tu estimate.
+  
+In real world settings, applying the Markowitz model to data tends to overweight a few stocks and short another small subset in really high proportions, which is very counterintuitive to the portfolio manager. Any asset with _negative_ expected returns is a shortable asset when solving for the efficient portfolio with no restrictions, and it is used to hedge a position for any other asset highly correlated to it with positive expected returns.  
+  
+In the early 1990s, Fischer Black and Robert Litterman, then working at Goldman Sachs, proposed a model from which an investor could derive the expected returns and modify them to take into account the investor's views on the returns on these assets. In an efficient market in equilibrium, the market capitalization of the assets represent the weights of the market portfolio and are closely related to their _expected excess returns_.  
+  
+The following sections describe the application of the Black-Litterman Model to stocks in the Mexican Market, keeping the mathematics to a minimum, and focusing on the data manipulation and assumptions taken into consideration.  
+  
+  
+### Downloading price series for stocks in R.  
+  
+To obtain financial data, R has a very neat package called _tidyquant_ which is the sum of the tidyverse packages and financial packages like _PerformanceAnalytics_ and _quantmod_. The following instructions are to define the tickers used in the extraction of the data:  
+
+```{r tickers}
+tickers <- c('AC.MX','ALFAA.MX','ALPEKA.MX','ALSEA.MX','AMXL.MX','ASURB.MX',
+        'BIMBOA.MX','BOLSAA.MX','CEMEXCPO.MX','ELEKTRA.MX','FEMSAUBD.MX','GAPB.MX',
+        'GCARSOA1.MX','GENTERA.MX','GFINBURO.MX','GFNORTEO.MX','GFREGIOO.MX','GMEXICOB.MX',
+        'GRUMAB.MX','IENOVA.MX','KIMBERA.MX','KOFL.MX','LABB.MX','LALAB.MX','LIVEPOLC-1.MX',
+        'MEXCHEM.MX','NEMAKA.MX','OHLMEX.MX','OMAB.MX','PE&OLES.MX','PINFRA.MX',
+        'SANMEXB.MX','TLEVISACPO.MX','VOLARA.MX','WALMEX.MX')
+
+tickers_gf <- c('BMV:AC',	'BMV:ALFAA',	'BMV:ALPEKA',	'BMV:ALSEA',	'BMV:AMXL',	'BMV:ASURB', 'BMV:BIMBOA','BMV:BOLSAA',	'BMV:CEMEXCPO',	'BMV:ELEKTRA',	'BMV:FEMSAUBD',	'BMV:GAPB',	'BMV:GCARSOA1','BMV:GENTERA','BMV:GFINBURO',	'BMV:GFNORTEO',	'BMV:GFREGIOO',	'BMV:GMEXICOB',	'BMV:GRUMAB', 'BMV:IENOVA',	'BMV:KIMBERA','BMV:KOFL',	'BMV:LABB',	'BMV:LALAB',	'BMV:LIVEPOLC-1',	'BMV:MEXCHEM',	'BMV:NEMAKA',	'BMV:OHLMEX','BMV:OMAB',	'BMV:PE&OLES',	'BMV:PINFRA',	'BMV:SANMEXB',	'BMV:TLEVISACPO',	'BMV:VOLARA','BMV:WALMEX')
+
+mapeo_tickers <- cbind(tickers,tickers_gf)
+
+Precios<- tickers %>%
+            tq_get(get="stock.prices",from="2007-01-01")
+
+mexbol <-  tq_get(c("^MXX"),get="stock.prices",from="2000-01-01")
+```
+  
+From this data we can plot different visualizations of the market performance through time.
+
+```{r IPC, echo=FALSE}
+mexbol %>% 
+  ggplot(aes(x = date, y = adjusted)) +
+  geom_line(col = "darkblue", size = 1) +
+  labs(title = "Mexbol historical level",
+       x = "Time", y = "Price", color = "") +
+  scale_y_continuous(labels = scales::dollar) + theme_tq() 
+```
+  
+Next in line is to estimate returns. We will work with monthly data to obtain our estimations for the Variance-Covariance Matrix and other interesting results. In Mexico, our Certificados de Tesorería are used as our Risk-Free asset.
+
+```{r returns, message=FALSE, warning=FALSE}
+mexbol_rend <- mexbol %>%
+  tq_transmute(select   = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic") %>% 
+                summarise(xbar = mean(monthly.returns)*12, vol = sd(monthly.returns), sharpe = (xbar - 0.065)/(vol*sqrt(12)))
+
+cetes <- read_delim("C:/Users/Gerardo/Documents/Repository/BlackLitterman/cetes.csv",delim = ",",skip=17,na = c("", "NA","N/E"))
+cetes$date <- as.Date(cetes$Fecha,format="%d/%m/%Y")
+
+cetes <- select(cetes,date,SF282) %>% 
+          filter(date >= "2000-01-01") %>% 
+            mutate(rf_mens = SF282*28/36000)
+
+cetes$date<-as.Date(sapply(cetes$date,eom))
+
+cetes %>% 
+  ggplot(aes(x = date, y = SF282/100)) +
+  geom_line(col = "darkblue", size = 1) +
+  labs(title = "CETES 28 Days Rate",
+       x = "", y = "Adjusted Prices", color = "") +
+  scale_y_continuous(labels = scales::percent) + theme_tq() 
+
+mexbol_mens <- mexbol %>%
+  tq_transmute(select   = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic") 
+mexbol_mens$date<-as.Date(sapply(mexbol_mens$date,eom))
+mexbol_mens <- inner_join(mexbol_mens,cetes,by='date') %>% 
+  mutate(mktER = monthly.returns - rf_mens)
+```
+  
+Now that we have our return series we can plot the cummulative returns on the mexbol from 2000 to date:
+```{r cummexbol, message=FALSE, warning=FALSE}
+ggplot(aes(x=date,y=cumprod(1+mexbol_mens$monthly.returns)),data=mexbol_mens) +
+  geom_line() +
+  labs(title = "Cumulative Returns on Mexbol", x = "Time", y = "Cum. Returns", col = "") +
+  scale_y_continuous(labels = scales::percent) + theme(axis.text.x = element_text(angle = 0, hjust = 1)) 
+```
+
+Not bad for every peso invested since 2000, but what about 2010 to date? a Very poor performance as it can be shown.
+
+```{r cummexbol2010, message=FALSE, warning=FALSE}
+ggplot(aes(x=date,y=cumprod(1+monthly.returns)),data=mexbol_mens[mexbol_mens$date >= "2010-01-01",]) +
+  geom_line() +
+  labs(title = "Cumulative Returns on Mexbol", x = "Time", y = "Cum. Returns", col = "") +
+  scale_y_continuous(labels = scales::percent) + theme(axis.text.x = element_text(angle = 0, hjust = 1)) 
+
+print(paste0("CAGR:" ,round((tail(cumprod(1+mexbol_mens[mexbol_mens$date >= "2010-01-01",]$monthly.returns),1))^(1/8)-1,5)*100,"%"))
+```
+  
+Next in line is to get our Market Capitalization for each company. To accomplish this, we will get our data from Google Finance and contrast it to the data in the BMV (Bolsa Mexicana de Valores). Some companies will have to be updated as the shares reported in Google Finance do not match the shares outstanding of the company. 
+```{r marketcap,message=FALSE, warning=FALSE}
+market_cap <- tq_get(tickers_gf,get="financials") %>% 
+  filter(type=="BS") %>% 
+  select(-annual) %>%  
+  unnest() %>% filter(date=="2017-09-30", category == "Total Common Shares Outstanding")
+
+CommonStock <- tq_get(tickers_gf,get="financials") %>% 
+  filter(type=="BS") %>% 
+  select(-annual) %>%  
+  unnest() %>% filter(date=="2017-09-30", category == "Common Stock, Total")
+
+cap_mercado <- left_join(as.tibble(mapeo_tickers),market_cap, by=c("tickers_gf"="symbol"))
+
+ult_precio <- Precios %>%  filter(date==max(date)) %>%  select(symbol,close)
+
+cap_mercado <- left_join(cap_mercado,ult_precio,by=c("tickers"="symbol"))
+
+#Hubo que incluir un par a mano porque no están en Google Finance, oh dear!
+cap_mercado$value[cap_mercado$tickers=="VOLARA.MX"] <- 877.856219
+cap_mercado$value[cap_mercado$tickers=="PE&OLES.MX"] <- 397.475747
+cap_mercado$value[cap_mercado$tickers=="TLEVISACPO.MX"] <- 2557.893922
+cap_mercado$value[cap_mercado$tickers=="FEMSAUBD.MX"] <- 3347.57
+cap_mercado$value[cap_mercado$tickers=="CEMEXCPO.MX"] <- 14565.082738
+cap_mercado$value[cap_mercado$tickers=="KOFL.MX"] <- 7233.29
+
+cap_mercado <- cap_mercado %>%  mutate(market.cap = value*close)
+
+cap_mercado %>%
+  ggplot(aes(tickers,market.cap)) + 
+  geom_col(fill="grey") +
+  labs(title = "BMV 35 compañías", x = "", y="Market Capitalization (Millions)",col = "") +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  scale_y_continuous(labels = scales::dollar)
+
+mkt.cap.adjust <- cap_mercado$market.cap
+
+names(mkt.cap.adjust) <- cap_mercado$tickers
+
+pesos_mercado <- mkt.cap.adjust/sum(mkt.cap.adjust,na.rm=T)
+pesos_mercado[is.na(pesos_mercado)] <- 0
+sum(pesos_mercado)
+```
+  
+We also need to manipulate our returns to explore if they make sense or not:
+
+```{r returnos,message=FALSE, warning=FALSE}
+rend_mensuales <- Precios %>% group_by(symbol) %>%
+  tq_transmute(select   = adjusted, 
+               mutate_fun = periodReturn, 
+               period     = "monthly", 
+               type       = "arithmetic")
+
+rend_mensuales$date <- as.Date(sapply(rend_mensuales$date,eom))
+rend_mensuales <- inner_join(rend_mensuales,cetes,by='date')
+
+rend_mensuales %>%
+  ggplot(aes(x = symbol, y = monthly.returns)) + 
+  geom_boxplot(fill="lightblue") +
+  labs(title = "Monthly returns by company", x = "", y = "", col = "") +
+  scale_y_continuous(labels = scales::percent) + theme(axis.text.x = element_text(angle = 60, hjust = 1)) 
+
+rend_mensuales %>% summarise(
+                             mean=round(mean(monthly.returns,na.rm=T),4),
+                             sd = round(sd(monthly.returns,na.rm=T),4),
+                             min=round(min(monthly.returns,na.rm=T),4),
+                             p1 = round(quantile(monthly.returns,.01,na.rm=T),4),
+                             p99 = round(quantile(monthly.returns,.99,na.rm=T),4),
+                             maxi = round(max(monthly.returns,na.rm=T),4)) %>% ungroup() %>% 
+                      arrange(desc(maxi))
+```
+
+From our statistics we see that __AC.MX__ seems odd, further inspection would help detect errors:  
+  
+```{r plotprices}
+Precios[Precios$symbol %in% c("AC.MX","SANMEXB.MX","GRUMAB.MX"),] %>% 
+  ggplot(aes(x = date, y = adjusted)) +
+  geom_line(col = "darkblue", size = 1) +
+  labs(title = "Daily Stock Prices",
+       x = "", y = "Adjusted Prices", color = "") +
+  facet_wrap(~ symbol, ncol = 4, scales = "free_y") +
+  scale_y_continuous(labels = scales::dollar) + theme_tq()+ theme(axis.text.x = element_text(angle = 0, hjust = 1))
+```
+  
+Some of the prices are very odd, indeed. There are multiple ways of correcting this, but winsorizing is always helpful.  
+  
+```{r windsorize}
+#Winsorizamos los rendimientos
+
+rend_mensuales <-rend_mensuales %>% 
+                  filter(!(is.na(monthly.returns))) %>% group_by(symbol) %>% 
+                      mutate(maxMR = quantile(monthly.returns,.98),
+                             minMR = quantile(monthly.returns,.02),
+                             adj.monthly.returns = ifelse(monthly.returns > maxMR,maxMR,ifelse(monthly.returns < minMR,minMR,monthly.returns))) %>% 
+                                select(-maxMR,-minMR,-monthly.returns)
+
+
+rend_mensuales %>%
+  ggplot(aes(x = symbol, y = adj.monthly.returns)) + 
+  geom_boxplot(fill="lightblue") +
+  labs(title = "Winsorized Monthly returns by company", x = "", y = "", col = "") +
+  scale_y_continuous(labels = scales::percent) + theme(axis.text.x = element_text(angle = 60, hjust = 1)) 
+
+
+rend_mensuales %>% 
+  summarise(Total = n(), xbar=mean(adj.monthly.returns,na.rm=T), vol=sd(adj.monthly.returns,na.rm=T)) %>%
+  ggplot(aes(x = vol, y = xbar, label=symbol)) + geom_text(size=3) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent) +
+  theme_tq() + labs(title = "Risk vs Return Tradeoff", subtitle="monthly frequency", y = "Mean return", x = "Volatility")  
+
+rend_mensuales<- rend_mensuales %>% 
+  mutate(monthly.ER =  adj.monthly.returns - rf_mens)
+
+```
+  
+There, problem fixed. Let us move forward to the black litterman implementation.  
+Our next step is to estimate our Variance-Covariance Matrix, as follows:
+
+```{r varcovar}
+matrix_rend <- rend_mensuales %>% select(symbol,date,adj.monthly.returns) %>% 
+  spread(key="symbol",value="adj.monthly.returns")
+cov_mens <- cov(as.matrix(matrix_rend[,-1]),use="pairwise.complete.obs")
+cov_mens[is.na(cov_mens)] <- 0
+```
+  
+And we are all set to allocate our resources using Black Litterman!.  
+  
+### The parameters for Black Litterman.  
+  
+I'm going to estimate the parameters for the BL model without much mathematics, but i will still outline the problem.  
+If we are an investor seeking to maximize our Utility from investing, we can formulate the following:  
+$$
+U = w^t\Pi - (\frac{\lambda}{2})w^t\Sigma w
+$$
+where we have:  
+  
+
+* $U$: is the Utility  
+* $w$: are the weights on each asset.  
+* $\Pi$: is a vector of Expected Returns.  
+* $\Sigma$: is the Variance-Covariance matrix.  
+* $\lambda$: is our risk-adversion factor.  
+  
+It can be shown (I always wanted to do that) that our optimal solution must hold that:
+  
+$$
+\Pi - \lambda\Sigma w = 0
+$$
+And thus, $\Pi = \lambda\Sigma w $.  
+  
+Furthermore, we can derive our $\lambda$ and find that it is $\lambda = \frac{E[R_m]-R_f}{\sigma^2}$. We can estimate this from our historical data on the Mexbol and obtain the _Prior Returns_, $\Pi$. 
+```{r aversion_riesgo}
+aversion_riesgo = mean(mexbol_mens$mktER)/var(mexbol_mens$monthly.returns)
+print(paste0("Lambda is: " ,round(aversion_riesgo,2)))
+retornosEsperados = aversion_riesgo*(cov_mens) %*% pesos_mercado
+retornosEsperados[is.na(retornosEsperados)] <- 0
+rend_mensuales %>% 
+  summarise(Total = n(), vol=sd(adj.monthly.returns,na.rm=T)) %>%
+  ggplot(aes(x = vol*sqrt(12), y = retornosEsperados*12, label=symbol)) + geom_text(size=2.5) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent) +
+  theme_tq() + labs(title = "Risk and Return", subtitle="Monthly frequency (annualized)", y = "Implied CAPM excess return", x = "Volatility")  
+
+```
+  
+Our _Prior Excess Returns_ are the ones that, through Markowitz's optimization of Mean-Variance, would assign weights equal to Market Capitalization of each company. That is, these returns are derived from the current state of the Market.  
+  
+We are going to use these returns to estimate our Posterior distribution of returns, based on our View of the Market. To do this, we employ Black Litterman's formula:  
+$$
+E[R] = [(\tau\Sigma^{-1}) + P'\Omega^{-1}P]^{-1}[(\tau\Sigma^{-1})\Pi+P'\Omega^{-1}Q]
+$$
+
+A complex formula if you ask me, here we have:  
+  
+* $E[R]$: is the posterior Expected Returns.  
+* $\tau$: is a scalar.  
+* $\Pi$: is a vector of Prior Expected Returns.  
+* $\Sigma$: is the Variance-Covariance matrix.  
+* $P$: Is a matrix with the assets involved in our Views.
+* $\Omega$: is the uncertainty associated with our Views.  
+* $Q$: is the vector containing our Views.  
+  
+So far, we have mentioned _Views_ quite a few times without explaining in detail what we mean by them: Views represent a conviction of the investor with a degree of confidence of certain events happening. To exemplify, we will have three particular Views in our model:  
+  
+  1. Televisa will underperform the market by 1% (75% Confidence).  
+  2. The airports will underperform banks by 2% (50% Confidence).  
+  3. In our bottlers industry, AC will outperform KOFL by 1% (65% Confidence).
+    
+  
+This leads to expressing our Views through matrixes. To do this, we will first define our Matrices and fill the corresponding values.  
+```{r Views}
+Q = matrix(c(-0.01,0.02,0.01),ncol = 1)
+
+#Vectores de Views por orden
+
+View1 <- matrix(0,nrow=1,ncol = length(colnames(cov_mens)))
+View2 <- matrix(0,nrow=1,ncol = length(colnames(cov_mens)))
+View3 <- matrix(0,nrow=1,ncol = length(colnames(cov_mens)))
+colnames(View1) <- colnames(cov_mens)
+colnames(View2) <- colnames(cov_mens)
+colnames(View3) <- colnames(cov_mens)
+
+View1[1,"TLEVISACPO.MX"] <- 1
+View2[1,c("GAPB.MX","OMAB.MX","ASURB.MX")] <- c(-1/3,-1/3,-1/3)
+View2[1,c("GFREGIOO.MX","SANMEXB.MX","GFNORTEO.MX","GFINBURO.MX","GENTERA.MX")] <- c(1/5,1/5,1/5,1/5,1/5)
+View3[1,"AC.MX"] <- 1
+View3[1,"KOFL.MX"] <- -1
+
+P <- rbind(View1,View2,View3)
+varView1 <- View1 %*% cov_mens %*% t(View1)
+varView2 <- View2 %*% cov_mens %*% t(View2)
+varView3 <- View3 %*% cov_mens %*% t(View3)
+
+#Tao = 1 /(Muestras - Activos)
+Tao <- (1/(59-35))
+
+Omega <- diag(c(varView1,varView2,varView3)*Tao,nrow=3,ncol=3)
+
+BLExpectedReturns <- solve(solve(Tao*cov_mens) + t(P) %*% solve(Omega) %*% P) %*% (solve(Tao*cov_mens)%*%retornosEsperados + t(P) %*% solve(Omega) %*% Q)
+
+CovBL <- cov_mens + solve(solve(Tao*cov_mens) + t(P) %*% solve(Omega) %*% P)
+```  
+  
+With these results we have derived a different distribution for our Risk and Return space, shown in the following plot:  
+```{r graficasBL}
+rend_mensuales %>% 
+  summarise(Total = n(), vol=sd(adj.monthly.returns,na.rm=T)) %>%
+  ggplot(aes(x = sqrt(diag(CovBL)*12), y = 12*BLExpectedReturns, label=symbol)) + geom_text(size=2.5) + 
+  scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent) +
+  theme_tq() + 
+  labs(title = "Risk and Return", subtitle="monthly frequency (annualized)", y = "Black Litterman posterior Returns", x = "Volatility") 
+
+```
+  
+  
+And now we can perform Mean-Variance optimization to find our optimal portfolios.  
+```{r FronteraBL}
+
+equal <- seq(1,1,length.out = (dim(CovBL)[1]))
+equal <- matrix(equal,ncol=1)
+b<-1
+
+min_var <- quadprog::solve.QP(CovBL,pesos_mercado,equal,b,meq=1,factorized=T)
+w_min_var <- min_var$solution
+
+ret_minvar <- t(w_min_var) %*% BLExpectedReturns
+risk_minvar <- t(w_min_var) %*% CovBL %*% w_min_var
+port_min_var <- data.frame(list(retorno = ret_minvar,riesgo=risk_minvar,symbol=c("Portafolio 1")))
+
+frontera <- port_min_var
+restricciones <- matrix(cbind(equal,BLExpectedReturns),ncol=2)
+
+weights_portfolios <- matrix(w_min_var,nrow=1)
+colnames(weights_portfolios) <- colnames(CovBL)
+i <-2
+for (ret in seq(as.numeric(frontera[1,c("retorno")])*1.01,max(BLExpectedReturns)*5.5,length.out=60)){
+  b <- c(1,ret)
+  optimiza_ret <- quadprog::solve.QP(CovBL,pesos_mercado,restricciones,b,meq=2,factorized=T)
+  nuevo <- data.frame(list(retorno=matrix(optimiza_ret$solution,nrow=1) %*% matrix(BLExpectedReturns,ncol=1),
+                           riesgo=matrix(optimiza_ret$solution,nrow=1) %*% CovBL %*% t(matrix(optimiza_ret$solution,nrow=1)),symbol=paste0("Portafolio ",i)))
+  frontera <- rbind(frontera,nuevo)
+  weights_portfolios <- rbind(weights_portfolios,matrix(optimiza_ret$solution,nrow=1))
+  i <- i +1
+}
+
+portafolios <- data.frame(list(tickers = colnames(weights_portfolios),t(weights_portfolios)))
+
+rend_mensuales %>% 
+  summarise(Total = n(), vol=sd(adj.monthly.returns,na.rm=T)) %>%
+  ggplot(aes(x = sqrt(diag(CovBL)*12), y = BLExpectedReturns*12, label=symbol)) + geom_text(size=2.5) + scale_x_continuous(labels = scales::percent) + scale_y_continuous(labels = scales::percent) +
+  theme_tq() + labs(title = "Risk vs Return Tradeoff", subtitle="monthly frequency", y = "BL Expected Returns", x = "Volatility")  +
+  geom_line(aes(x=riesgo*sqrt(12),y=retorno*12, color="red"), data=frontera, show.legend=F)
+
+```
+  
+And that's how it's done! Let us compare some of the portfolios.
+
+```{r allocation}
+portafolios2 <- melt(portafolios[,c(1,2,5,10,20)], id.vars = "tickers")
+portafolios2 %>%
+  ggplot(aes(x = tickers,y=value)) + 
+  geom_col() +
+  facet_grid(variable ~ .)  +
+  theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+  scale_y_continuous(labels = scales::percent)
+
+```
+  
+Here we are showing a couple portfolios, the minimum variance (X1), and higher-return ones.  
+There are a couple of points to make when analyzing these portfolios:  
+* First of all, we don't have _corner_ portfolios, that is, we have invested in almost every asset.  
+* When we want to achieve higher returns, we are consistently outweighting and underweighting different assets, but we keep our proportions. 
+* Our Views play a critical roll, but we aren't exactly following our Views without considering the relationship of all our assets. This is interesting when moving from a portfolio to a different allocation, as the change in asset weights seems continuous in a way.  
+  
+Hope you enjoyed our exercise. Feel free to contact us if any questions arise!.
