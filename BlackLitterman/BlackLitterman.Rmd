@@ -2,7 +2,10 @@
 title: "Black Litterman"
 author: "Gerardo Alcala"
 date: "December 2017"
-output: html_document
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
 ---
 
 ```{r setup, include=FALSE}
@@ -12,7 +15,7 @@ library(tidyquant)
 library(quadprog)
 library(ggplot2)
 library(igraph)
-
+library(reshape2)
 
 eom <- function(date){
   mes = month(date)
