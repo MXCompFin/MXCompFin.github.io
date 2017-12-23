@@ -32,3 +32,5 @@ mxcompfin@gmail.com
 * [Filtering Stocks using a Regression Model (**R**)](https://mxcompfin.github.io/Regression/Stock_Picking_in_R.html)
 
 * [Black Litterman on Real Stock Data (**R**)](https://mxcompfin.github.io/BlackLitterman/BlackLitterman.html)
+
+* [Portfolio's Conditional Value-at-Risk Optimization (**Python**)](https://mxcompfin.github.io/CVaROptimization/CVaROptimization.html)
