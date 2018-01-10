@@ -1,0 +1,341 @@
+---
+title: "Credit Scoring with R"
+author: "Gerardo Alcala"
+date: "January 2018"
+output:
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(DescTools)
+library(Hmisc)
+library(purrr)
+library(reshape2)
+library(varhandle)
+library(caret)
+
+```
+
+## Credit Scoring: an Introduction.
+
+Credit scoring refers to an analysis made by lenders and banks to extended credit (or not) to customers. It has many applications within the financial industry as it automated the underwriting process substantially and allows to derive more sophisticated products to final customers (Risk based pricing is an example).  
+  
+What I'm going to do is show the versatility of __R__ to deal with a dataset ready to perform analysis and model. Obviously, as it is the case with most applications, the real deal comes when you have to collect the data, define what is a __bad__ customers and so on.  
+  
+This example also illustrated the ease to build your own functions to perform the computations required to obtain a model. __R__ has many functions built in different packages that help you process your functions through datasets with much control on the output and inputs.
+
+## The Data  
+  
+The dataset comes from the Kaggle Competition [Give me some credit](https://www.kaggle.com/c/GiveMeSomeCredit) which consists in a small dataset of 150,000 observations with 10 predictors. We proceed to read and inspect the data, and rename our columns to more suitable and understandable names of our liking.
+
+```{r read, warning=FALSE, error=FALSE,message=FALSE}
+data <- read_csv("C:/Users/galcala/Loan/cs-training.csv")
+data.tbl <- as_tibble(data.frame(data))
+typeof(data.tbl)
+glimpse(data.tbl)
+data.tbl$X1 <- NULL
+colnames(data.tbl) <- c("bad","revUtilUnsec","age","n30_59dpd_nw","debtRatio","mIncome","nOpenTrades",
+                        "n90dlate","nREstate","n60_89dpd_nw","nDependents")
+
+```
+
+Alright, seems like our data is well read. Let us split it into training and testing for modelling purposes and work our way through the data.  
+A very useful tool for inspecting variables (univariate) is the Desc function from the DescTools package, as it gives you many relevant statistics and information as well as useful plots to understand the distributions.
+
+```{r describe, warning=FALSE, error=FALSE,message=FALSE}
+set.seed(43)
+inTrain <- createDataPartition(y=data.tbl$bad,p = .8, list = FALSE)
+training <- data.tbl[inTrain,]
+testing <- data.tbl[-inTrain,]
+Desc(training)
+#Income and Dependents have missing values (20% and 2.6%)
+#6.7% delinquency rate
+#Revolving highly skewed to the right. Needs trimming
+#Age: We have a "0" age, 21 is our real minimum.
+#n30_59dpd_nw: 84% zeros, skewed to the right
+#debtRatio: 2.7% zeros. Highly skewed.
+#mIncome: 1.3% zeros, highly skewed. 20% missing. Some negative.
+#nOpenTrades: 1.3% zeros. slightly skewed. Integer variable.
+#n90dlate: 94.4% zeros, highly skewed
+#nREstate: 37.5% zeros, 33% 1s and 2+ the rest.
+#n60_89dpd_nw: 94.9% zeros. skewed to the right.
+#nDependents: 58% zeros. some missing (2.6%) outliers to the right.
+```
+
+Highly skewed data seems to be the norm, and such other undesired properties like censoring, missings and highly concentrated variables in only one of two attributes (mainly zero). But these are the norm for real world variables in credit scoring. What we are going to do next is to explore the relationship with our target variable, __bad__ and each characteristic. Let us do this visually through a plot.  
+We are going to plot our variable partitioned in 10 groups (or less, if the data doesn't allow for 10 groups) and plot the distribution of the data in bars and the rate of bads for each bin in a red line. These plots help us understand the relationship from our variables and our target.
+
+
+```{r biplot,warning=FALSE, error=FALSE,message=FALSE,echo=FALSE,results='hide',fig.keep='all'}
+graf_biv <- function(variable,datos=training,grupos=10,cortes=NULL){
+  
+  if (is.null(cortes)){datos$nueva <- cut2(datos[[variable]],g=grupos)}
+  else{datos$nueva <- cut2(datos[[variable]],cuts = cortes)}
+  
+  
+  subset <- datos %>% 
+              group_by(nueva) %>% 
+                dplyr::summarise(casos = n(), media = round(mean(bad),3)) %>% ungroup()
+  
+  escalay <- max(subset$media)
+  ajustey <- max(subset$casos)
+  media_global <- mean(datos$bad)
+  
+  ggplot(subset)  + 
+    geom_bar(aes(x=nueva, y=casos),stat="identity", fill="grey", colour="grey")+
+    geom_point(aes(x=nueva, y=(ajustey/escalay)*media),stat="identity", color = "#D55E00")+
+    geom_path(aes(x=nueva, y=(ajustey/escalay)*media,group=1),stat="identity", color = "#D55E00")+
+    geom_text(aes(label=paste0((100*media),"%"), x=nueva, y=((ajustey/escalay)*media+ajustey/20)), 
+              colour="black",size = 2.5)+
+    #geom_text(aes(label=Response, x=Year, y=0.95*Response), colour="black")+
+    scale_y_continuous(sec.axis = sec_axis(~./(ajustey/escalay),labels = scales::percent ,name ="Tasa de Incumplimento")) +
+    geom_hline(yintercept  = (ajustey/escalay)*(media_global), col = "red") +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1))  +
+    xlab(paste0(variable, " en ", grupos, " grupos")) +
+    ggtitle("Análisis Bivariado") 
+}
+variables <- colnames(data.tbl)
+variables <- variables[-1]
+purrr::map(variables,safely(graf_biv),datos = training, grupos = 15)
+
+#Conclusiones de bivariados
+#Revolving Utilization has high discriminant power
+#The age of the candidate has high discriminant power
+#n30_59dpd_nw shows a strong relationship
+#debtRatio has some counterintuitive results on the high end (related to mIncome missing, perhaps)
+#mIncome is highly discriminant. beware of missings.
+#nOpenTrades shows highly discriminant in the first group
+#n90dlate concentrated but behaves correctly
+#nREstate we can define 3 groups, 0, 1-2 and 3+ which profiles differently
+#n60_89dpd concentrated but behaves correctly
+#nDependents behaves correctly, NA and 0 are similar in risk.
+```
+
+In a credit scoring setting, it is most common to transform our characteristic into discrete variables through their Weight of Evidence (WoE) transformation, best explained [here](http://multithreaded.stitchfix.com/blog/2015/08/13/weight-of-evidence/). The advantage from these formulation is that it guarantees monotonic relationships and it is easily transformed into _points_ to add up in a _scorecard_ once the model is fitted.  
+  
+To do that, let us first define __X__, our design matrix, with the variables grouped into our values of interest. We also deal with our NAs to obtain better results.
+
+```{r designmatrix}
+training$mIncome[training$mIncome<0] <- 0
+
+X.tbl <- as_tibble(data.frame(list(bad=training$bad,
+                         revUtilUnsec = cut2(training$revUtilUnsec,g=15),
+                         age = cut2(training$age,g=13),
+                         n30_59dpd_nw = cut2(training$n30_59dpd_nw,cuts=c(0,1,2,3)),
+                         mIncome=cut2(training$mIncome,cuts=c(0,500,1250,1500,2000,3000,4000,5000,6000,7000,8000,9000)),
+                         debtRatio = cut2(training$debtRatio,cuts=c(0,0.00001,.4,.6,.7,.8,.9,1)),
+                         nOpenTrades = cut2(training$nOpenTrades,cuts=c(0,1,2,3,4,5)),
+                         n90dlate = cut2(training$n90dlate,cuts=c(0,1,2,3)),  
+                         nREstate = cut2(training$nREstate,cuts=c(0,1,2,3)),
+                         n60_89dpd_nw = cut2(training$n60_89dpd_nw,cuts=c(0,1,2,3)),
+                         nDependents = cut2(training$nDependents,cuts=c(0,1,2,3,4))
+)
+))
+#Transformamos los "NA" en "-1" para mantener dentro de los factores
+X.tbl$nDependents<-factor(X.tbl$nDependents, levels = levels(addNA(X.tbl$nDependents)), labels = c(levels(X.tbl$nDependents), -1), exclude = NULL)
+X.tbl$mIncome<-factor(X.tbl$mIncome, levels = levels(addNA(X.tbl$mIncome)), labels = c(levels(X.tbl$mIncome), -1), exclude = NULL)
+
+```
+
+Now we are ready to compute and transform our variables to their respective WoE. We are going to use two functions to do this (and show that it works with an example):
+
+```{r transwoe}
+computaWoE <- function(variable,datos=X.tbl,target = "bad"){
+  
+  datos$variable <- datos[[variable]]
+  datos$target <- datos[[target]]
+  
+  output <- datos %>% dplyr::mutate(totalB = sum(target), totalG = n() - totalB) %>% 
+    group_by(variable) %>% dplyr::summarise(Bad = sum(target), Good = sum(1-target), Total = n(), 
+                                     totalB = max(totalB), totalG = max(totalG)) %>% 
+    ungroup() %>% dplyr::transmute(variable=variable,WoE = 100*log( (Good/totalG) / (Bad/totalB)))
+  
+  columnas <- colnames(output)
+  columnas[1] <- c(variable)
+  colnames(output) <- columnas
+  output
+}
+
+transformaWoE <- function(variable,datos=X.tbl,target = "bad"){
+  fact <- datos[[variable]]
+  levels(fact)[computaWoE(variable)[[1]]] <- computaWoE(variable,datos=datos)$WoE
+  fact
+}
+
+computaWoE("age")
+length(transformaWoE("debtRatio"))
+```
+
+It is always useful to explore the transformed variables WoE in the same scale, as it is an indication os predictability.
+
+```{r woeplot,fig.width=9,fig.height=14}
+#Visualicemos los WoE
+
+varWoE <- list(variable = c(), indice = c(),WoE = c())
+for (i in seq_along(variables)){
+  extrae <-computaWoE(variables[i])
+  varWoE$variable <- c(varWoE$variable,rep(variables[i],length(extrae$WoE))) 
+  varWoE$indice <- c(varWoE$indice,1:length(extrae$WoE))
+  varWoE$WoE <- c(varWoE$WoE,extrae$WoE)
+}
+
+varWoE.tbl <- as_tibble(data.frame(varWoE))
+
+ggplot(varWoE.tbl,aes(x=indice,y=WoE)) +
+  geom_col() + xlab("WoE de cada variable, misma escala") + theme(
+    axis.text.x=element_blank(),
+    axis.ticks.x=element_blank()) +
+  facet_wrap(~variable,ncol=3,scales="free_x")
+```
+
+Let us construct our final dataset which contains the WoE for every variable to include in our model, this can be doe succinctly with the __purrr__ package in __R__ and the map function, as follows:  
+```{r finaldataset}
+res <- purrr::map(variables,safely(transformaWoE)) %>% purrr::map("result")
+str(res)
+  
+data.tbl <- as_tibble(as.data.frame(res))
+colnames(data.tbl) <- variables
+
+#remove factors and keep them as numeric
+data.tbl <- purrr::map(data.tbl,varhandle::unfactor)
+data.tbl<- as_tibble(as.data.frame(data.tbl))
+
+data.tbl$bad <- X.tbl$bad
+str(data.tbl)
+```
+
+Seems we are ready to build our model!. We are going to use a logistic regression to show results and different metrics of performance.  
+  
+```{r model}
+modFit <- train(as.factor(bad)~.,data=data.tbl,method="glm", family="binomial")
+summary(modFit$finalModel)
+```
+
+Our model fitted well. Since we have transformed the variables to their WoE all Beta Coefficients have the same negative sign, as higher WoE leads to lower risk individuals. From the z-values of each coefficient we can derive the importance of the variable, but that is also shown with the varImp function:
+
+```{r varimp}
+varImp(modFit)
+```
+
+Same results as above. The statistics that describe our model are shown from a confusionMatrix output:
+```{r confm}
+pred <- predict(modFit,data.tbl)
+score <-predict(modFit,data.tbl,type="prob")
+colnames(score) <- c("pBueno","pMalo")
+
+confusionMatrix(pred,data.tbl$bad)
+```
+
+As the sample is highly unbalanced in the target variable, our Accuracy leads us to believe we've fitted a very good model when in fact it is not as strong as it seems. Kappa is a better indicator of fitness for unbalanced samples and it is not very strong, but still useful.
+
+Next in line is to visualize the fit of our model, we can use our previous function to plot the training sample:
+```{r plotb}
+data.tbl$pBueno <- score$pBueno
+data.tbl$pMalo <- score$pMalo
+graf_biv("pMalo",datos=data.tbl,grupos=30)
+
+```
+
+Not bad! Most Risk Managers are familiar with the Kolmogorov-Smirnov statistics, the ROC and it's Area Under the Curve (AUC). Let us obtain these statistics:
+```{r statistics}
+df.p <- data.tbl[order(data.tbl$pMalo),]
+df.p$cumBad <- cumsum(df.p$bad) / sum(df.p$bad)
+df.p$cumGood <- cumsum(1 - df.p$bad) / (dim(df.p)[1] - sum(df.p$bad))
+
+ggplot(df.p,aes(cumBad,cumGood)) + geom_path(col="black") +
+  geom_segment(x = 0, xend = 1, y = 0, yend = 1, col="grey") + xlim(0,1) + ylim(0,1) +
+  xlab("Specificity") + ylab("Sensitivity") + ggtitle("Curva ROC")
+
+#ROC con fórmula:
+modFit$ROC <- 1-(sum(df.p$cumBad/length(df.p$cumBad)) - sum(df.p$cumGood/length(df.p$cumGood)) + 0.5)
+print(paste0("AUC: ",round(modFit$ROC*100,2),"%"))
+
+
+print(paste0("KS: ",round(max(abs(df.p$cumBad - df.p$cumGood))*100,2),"%"))
+
+```
+
+## Testing Data
+
+```{r testing}
+testing$mIncome[testing$mIncome<0] <- 0
+
+XTest.tbl <- as_tibble(data.frame(list(bad=testing$bad,
+                         revUtilUnsec = cut2(testing$revUtilUnsec,g=15),
+                         age = cut2(testing$age,g=13),
+                         n30_59dpd_nw = cut2(testing$n30_59dpd_nw,cuts=c(0,1,2,3)),
+                         mIncome=cut2(testing$mIncome,cuts=c(0,500,1250,1500,2000,3000,4000,5000,6000,7000,8000,9000)),
+                         debtRatio = cut2(testing$debtRatio,cuts=c(0,0.00001,.4,.6,.7,.8,.9,1)),
+                         nOpenTrades = cut2(testing$nOpenTrades,cuts=c(0,1,2,3,4,5)),
+                         n90dlate = cut2(testing$n90dlate,cuts=c(0,1,2,3)),  
+                         nREstate = cut2(testing$nREstate,cuts=c(0,1,2,3)),
+                         n60_89dpd_nw = cut2(testing$n60_89dpd_nw,cuts=c(0,1,2,3)),
+                         nDependents = cut2(testing$nDependents,cuts=c(0,1,2,3,4))
+)
+))
+#Transformamos los "NA" en "-1" para mantener dentro de los factores
+XTest.tbl$nDependents<-factor(XTest.tbl$nDependents, levels = levels(addNA(XTest.tbl$nDependents)), labels = c(levels(XTest.tbl$nDependents), -1), exclude = NULL)
+XTest.tbl$mIncome<-factor(XTest.tbl$mIncome, levels = levels(addNA(XTest.tbl$mIncome)), labels = c(levels(XTest.tbl$mIncome), -1), exclude = NULL)
+```
+
+
+```{r nuevotest,warning=FALSE, error=FALSE,message=FALSE,echo=FALSE,results='hide',fig.keep='all'}
+
+cortaTest <- function(variable,datos=XTest.tbl,target = "bad"){
+  var <- data.frame(XTest.tbl[[variable]])
+  colnames(var) <- variable
+  var[,1] <- as.numeric(var[,1])
+  woes <- data.frame(computaWoE(variable))
+  woes[,1]<- as.numeric(woes[,1])
+  transformada <- left_join(var,woes)
+  colnames(transformada)<-c("x",variable)
+  transformada[[variable]]
+}
+
+
+previo <- purrr::map(variables,safely(cortaTest)) %>% purrr::map("result")
+dataT.tbl <- as_tibble(data.frame(previo))
+colnames(dataT.tbl) <-variables
+str(dataT.tbl)
+sum(is.na(dataT.tbl))
+dataT.tbl$bad <- testing$bad
+```
+
+Now let's evaluate our performance in our testing dataset:
+```{r tconfm}
+pred <- predict(modFit,dataT.tbl)
+score <-predict(modFit,dataT.tbl,type="prob")
+colnames(score) <- c("pBueno","pMalo")
+
+confusionMatrix(pred,dataT.tbl$bad)
+```
+```{r tplotb}
+dataT.tbl$pBueno <- score$pBueno
+dataT.tbl$pMalo <- score$pMalo
+graf_biv("pMalo",datos=dataT.tbl,grupos=30)
+
+```
+
+```{r tstatistics}
+df.p <- dataT.tbl[order(dataT.tbl$pMalo),]
+df.p$cumBad <- cumsum(df.p$bad) / sum(df.p$bad)
+df.p$cumGood <- cumsum(1 - df.p$bad) / (dim(df.p)[1] - sum(df.p$bad))
+
+ggplot(df.p,aes(cumBad,cumGood)) + geom_path(col="black") +
+  geom_segment(x = 0, xend = 1, y = 0, yend = 1, col="grey") + xlim(0,1) + ylim(0,1) +
+  xlab("Specificity") + ylab("Sensitivity") + ggtitle("Curva ROC")
+
+#ROC con fórmula:
+modFit$ROC <- 1-(sum(df.p$cumBad/length(df.p$cumBad)) - sum(df.p$cumGood/length(df.p$cumGood)) + 0.5)
+print(paste0("AUC: ",round(modFit$ROC*100,2),"%"))
+
+
+print(paste0("KS: ",round(max(abs(df.p$cumBad - df.p$cumGood))*100,2),"%"))
+
+```
