@@ -584,6 +584,7 @@ modFit$ROC &lt;-<span class="st"> </span><span class="dv">1</span>-(<span class=
 </div>
 <div id="testing-data" class="section level2">
 <h2>Testing Data</h2>
+<p>An issue with the current code is that our transformation of the data into WoE is <em>dependent</em> on the cuts and WoE of our training sample, thus we need to map there same groups in our testing dataset to the WoE calculated in our traning dataset (which can be quite cumbersome). To accomplish this first let us obtain the same groups (coded as factors in <strong>R</strong>).</p>
 <div class="sourceCode"><pre class="sourceCode r"><code class="sourceCode r">testing$mIncome[testing$mIncome&lt;<span class="dv">0</span>] &lt;-<span class="st"> </span><span class="dv">0</span>
 
 XTest.tbl &lt;-<span class="st"> </span><span class="kw">as_tibble</span>(<span class="kw">data.frame</span>(<span class="kw">list</span>(<span class="dt">bad=</span>testing$bad,
@@ -602,7 +603,8 @@ XTest.tbl &lt;-<span class="st"> </span><span class="kw">as_tibble</span>(<span 
 <span class="co">#Transformamos los &quot;NA&quot; en &quot;-1&quot; para mantener dentro de los factores</span>
 XTest.tbl$nDependents&lt;-<span class="kw">factor</span>(XTest.tbl$nDependents, <span class="dt">levels =</span> <span class="kw">levels</span>(<span class="kw">addNA</span>(XTest.tbl$nDependents)), <span class="dt">labels =</span> <span class="kw">c</span>(<span class="kw">levels</span>(XTest.tbl$nDependents), -<span class="dv">1</span>), <span class="dt">exclude =</span> <span class="ot">NULL</span>)
 XTest.tbl$mIncome&lt;-<span class="kw">factor</span>(XTest.tbl$mIncome, <span class="dt">levels =</span> <span class="kw">levels</span>(<span class="kw">addNA</span>(XTest.tbl$mIncome)), <span class="dt">labels =</span> <span class="kw">c</span>(<span class="kw">levels</span>(XTest.tbl$mIncome), -<span class="dv">1</span>), <span class="dt">exclude =</span> <span class="ot">NULL</span>)</code></pre></div>
-<p>Now let’s evaluate our performance in our testing dataset:</p>
+<p>And from here we can <em>map</em> the WoEs obtaining in our previous dataset:</p>
+<p>And it’s all done. We can evaluate our model with our testing dataset to measure the effectiveness of our model.</p>
 <div class="sourceCode"><pre class="sourceCode r"><code class="sourceCode r">pred &lt;-<span class="st"> </span><span class="kw">predict</span>(modFit,dataT.tbl)
 score &lt;-<span class="kw">predict</span>(modFit,dataT.tbl,<span class="dt">type=</span><span class="st">&quot;prob&quot;</span>)
 <span class="kw">colnames</span>(score) &lt;-<span class="st"> </span><span class="kw">c</span>(<span class="st">&quot;pBueno&quot;</span>,<span class="st">&quot;pMalo&quot;</span>)
@@ -652,6 +654,11 @@ modFit$ROC &lt;-<span class="st"> </span><span class="dv">1</span>-(<span class=
 <pre><code>## [1] &quot;AUC: 85.78%&quot;</code></pre>
 <div class="sourceCode"><pre class="sourceCode r"><code class="sourceCode r"><span class="kw">print</span>(<span class="kw">paste0</span>(<span class="st">&quot;KS: &quot;</span>,<span class="kw">round</span>(<span class="kw">max</span>(<span class="kw">abs</span>(df.p$cumBad -<span class="st"> </span>df.p$cumGood))*<span class="dv">100</span>,<span class="dv">2</span>),<span class="st">&quot;%&quot;</span>))</code></pre></div>
 <pre><code>## [1] &quot;KS: 56.07%&quot;</code></pre>
+<p>This can be done iteratively selection different partitions into testing and training to analyze the stability of the fit and coefficients.</p>
+</div>
+<div id="scaling-to-a-scorecard" class="section level2">
+<h2>Scaling to a scorecard</h2>
+<p>To scale our results to obtain points to add up can be donde from a linear transformation of our results, but right now I’ll leave that out of the scope of this entry. Obviously, if you’re interested in this step of the process feel free to contact us to discuss the issue.</p>
 </div>
 </section>
 

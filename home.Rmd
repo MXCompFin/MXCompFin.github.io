@@ -34,3 +34,5 @@ mxcompfin@gmail.com
 * [Black Litterman on Real Stock Data (**R**)](https://mxcompfin.github.io/BlackLitterman/BlackLitterman.html)
 
 * [Portfolio's Conditional Value-at-Risk Optimization (**Python**)](https://mxcompfin.github.io/CVaROptimization/CVaROptimization.html)
+
+* [Credit Scoring for Consumer Credit (**R**)](https://mxcompfin.github.io/Scoring/CreditScoring.html)

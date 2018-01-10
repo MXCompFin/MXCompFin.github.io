@@ -263,6 +263,8 @@ print(paste0("KS: ",round(max(abs(df.p$cumBad - df.p$cumGood))*100,2),"%"))
 
 ## Testing Data
 
+An issue with the current code is that our transformation of the data into WoE is _dependent_ on the cuts and WoE of our training sample, thus we need to map there same groups in our testing dataset to the WoE calculated in our traning dataset (which can be quite cumbersome). To accomplish this first let us obtain the same groups (coded as factors in __R__).
+
 ```{r testing}
 testing$mIncome[testing$mIncome<0] <- 0
 
@@ -284,6 +286,7 @@ XTest.tbl$nDependents<-factor(XTest.tbl$nDependents, levels = levels(addNA(XTest
 XTest.tbl$mIncome<-factor(XTest.tbl$mIncome, levels = levels(addNA(XTest.tbl$mIncome)), labels = c(levels(XTest.tbl$mIncome), -1), exclude = NULL)
 ```
 
+And from here we can _map_ the WoEs obtaining in our previous dataset:
 
 ```{r nuevotest,warning=FALSE, error=FALSE,message=FALSE,echo=FALSE,results='hide',fig.keep='all'}
 
@@ -307,7 +310,8 @@ sum(is.na(dataT.tbl))
 dataT.tbl$bad <- testing$bad
 ```
 
-Now let's evaluate our performance in our testing dataset:
+And it's all done. We can evaluate our model with our testing dataset to measure the effectiveness of our model.  
+
 ```{r tconfm}
 pred <- predict(modFit,dataT.tbl)
 score <-predict(modFit,dataT.tbl,type="prob")
@@ -339,3 +343,9 @@ print(paste0("AUC: ",round(modFit$ROC*100,2),"%"))
 print(paste0("KS: ",round(max(abs(df.p$cumBad - df.p$cumGood))*100,2),"%"))
 
 ```
+
+This can be done iteratively selection different partitions into testing and training to analyze the stability of the fit and coefficients.  
+  
+## Scaling to a scorecard
+
+To scale our results to obtain points to add up can be donde from a linear transformation of our results, but right now I'll leave that out of the scope of this entry. Obviously, if you're interested in this step of the process feel free to contact us to discuss the issue.
